@@ -23,6 +23,7 @@
 - Add experimental `@noalias` attribute.
 - Add a `--run-once` option to delete the output file after running it.
 - Add `@const` attribute for macros, for better error messages with constant macros.
+- Add `wincrt` setting to libraries.
 
 ### Fixes
 
@@ -36,6 +37,7 @@
 - Assertion with duplicate function pointer signatures #1286
 - Distinct func type would not accept direct function address assign. #1287
 - Distinct inline would not implement protocol if the inlined implemented it. #1292
+- Distinct inline can now be called if it is aliasing a function pointer.
 
 ### Stdlib changes
 
