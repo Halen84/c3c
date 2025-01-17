@@ -12,7 +12,7 @@ const int FIONREAD = 1074030207;
 const int FIONBIO = -2147195266;
 const int FIOASYNC = -2147195267;
 
-distinct NativeSocket = uptr;
+distinct NativeSocket = inline Win32_SOCKET;
 
 extern fn CInt ioctlsocket(NativeSocket, CLong cmd, CULong *argp);
 extern fn WSAError closesocket(NativeSocket);
@@ -21,6 +21,11 @@ extern fn int connect(NativeSocket, SockAddrPtr address, Socklen_t address_len);
 extern fn int bind(NativeSocket, SockAddrPtr address, Socklen_t address_len);
 extern fn int listen(NativeSocket, int backlog);
 extern fn NativeSocket accept(NativeSocket, SockAddrPtr address, Socklen_t* address_len);
+
+macro bool NativeSocket.is_valid(self)
+{
+	return self != (NativeSocket)(uptr)-1;
+}
 
 fn void! NativeSocket.set_non_blocking(self, bool non_blocking)
 {
@@ -66,16 +71,17 @@ fn anyfault convert_error(WSAError error)
 		case wsa::EACCESS: return IoError.NO_PERMISSION;
 		case wsa::EINPROGRESS: return NetError.STILL_PROCESSING_CALLBACK;
 		case wsa::EADDRINUSE: return NetError.ADDRESS_IN_USE;
-        case wsa::EALREADY: return NetError.CONNECTION_ALREADY_IN_PROGRESS;
-        case wsa::EBADF: return NetError.BAD_SOCKET_DESCRIPTOR;
-        case wsa::EINTR: return IoError.INTERRUPTED;
-        case wsa::EWOULDBLOCK: return IoError.WOULD_BLOCK;
-        case wsa::ECONNREFUSED: return NetError.CONNECTION_REFUSED;
-        case wsa::EISCONN: return NetError.ALREADY_CONNECTED;
-        case wsa::ENETUNREACH: return NetError.NETWORK_UNREACHABLE;
-        case wsa::ENOTSOCK: return NetError.NOT_A_SOCKET;
-        case wsa::EOPNOTSUPP: return NetError.OPERATION_NOT_SUPPORTED_ON_SOCKET;
-        case wsa::ETIMEDOUT: return NetError.CONNECTION_TIMED_OUT;
+		case wsa::EALREADY: return NetError.CONNECTION_ALREADY_IN_PROGRESS;
+		case wsa::EBADF: return NetError.BAD_SOCKET_DESCRIPTOR;
+		case wsa::EINTR: return IoError.INTERRUPTED;
+		case wsa::EWOULDBLOCK: return IoError.WOULD_BLOCK;
+		case wsa::ECONNREFUSED: return NetError.CONNECTION_REFUSED;
+		case wsa::EISCONN: return NetError.ALREADY_CONNECTED;
+		case wsa::ENETUNREACH: return NetError.NETWORK_UNREACHABLE;
+		case wsa::ENOTSOCK: return NetError.NOT_A_SOCKET;
+		case wsa::EOPNOTSUPP: return NetError.OPERATION_NOT_SUPPORTED_ON_SOCKET;
+		case wsa::ETIMEDOUT: return NetError.CONNECTION_TIMED_OUT;
+		case wsa::ECONNRESET: return NetError.CONNECTION_RESET;
 		default: return IoError.GENERAL_ERROR;
 	}
 }

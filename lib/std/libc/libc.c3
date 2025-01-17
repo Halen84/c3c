@@ -3,7 +3,6 @@
 // a copy of which can be found in the LICENSE_STDLIB file.
 module libc;
 
-
 // Constants need to be per os/arch
 const int EXIT_FAILURE = 1;
 const int EXIT_SUCCESS = 0;
@@ -44,7 +43,8 @@ const CInt SIGINT = 2;
 const CInt SIGQUIT = 3;
 const CInt SIGILL = 4;
 const CInt SIGTRAP = 5;
-const CInt SIGABTR = 6;
+const CInt SIGABRT = 6;
+const CInt SIGABTR @deprecated("use SIGABRT") = SIGABRT;
 const CInt SIGBUS = BSD_FLAVOR_SIG ? 10 : 7; // Or Mips
 const CInt SIGFPE = 8;
 const CInt SIGKILL = 9;
@@ -59,16 +59,10 @@ const CInt SIGTSTP = BSD_FLAVOR_SIG ? 18 : 20;
 const CInt SIGCONT = BSD_FLAVOR_SIG ? 19 : 18;
 const CInt SIGCHLD = BSD_FLAVOR_SIG ? 20 : 17;
 
-const bool BSD_FLAVOR_SIG @local = env::OPENBSD || env::DARWIN || env::FREEBSD || env::NETBSD;
+const bool BSD_FLAVOR_SIG @local = env::DARWIN || env::BSD_FAMILY;
 
 def Time_t = $typefrom(env::WIN32 ? long.typeid : CLong.typeid);
 def Off_t = $typefrom(env::WIN32 ? int.typeid : usz.typeid);
-
-struct Timespec
-{
-	Time_t tv_sec;
-	CLong tv_nsec;
-}
 
 module libc @if(env::LIBC);
 
@@ -115,11 +109,12 @@ extern fn ZString getenv(ZString name);
 extern fn ZString gets(char* buffer);
 extern fn Tm* gmtime(Time_t* timer);
 extern fn Tm* gmtime_r(Time_t *timer, Tm* buf) @if(!env::WIN32);
+extern fn CInt isatty(Fd fd) @if(!env::WIN32);
 extern fn CLong labs(CLong x);
 extern fn LongDivResult ldiv(CLong number, CLong denom);
 extern fn Tm* localtime(Time_t* timer);
 extern fn Tm* localtime_r(Time_t* timer, Tm* result) @if(!env::WIN32);
-extern fn void longjmp(JmpBuf* buffer, CInt value);
+extern fn void longjmp(JmpBuf* buffer, CInt value) @if(!env::NETBSD && !env::OPENBSD);
 extern fn void* malloc(usz size);
 extern fn void* memchr(void* str, CInt c, usz n);
 extern fn CInt memcmp(void* buf1, void* buf2, usz count);
@@ -143,7 +138,7 @@ extern fn void rewind(CFile stream);
 extern fn CInt scanf(ZString format, ...);
 extern fn void setbuf(CFile stream, char* buffer);
 extern fn int setenv(ZString name, ZString value, CInt overwrite);
-extern fn CInt setjmp(JmpBuf* buffer) @if(!env::WIN32);
+extern fn CInt setjmp(JmpBuf* buffer) @if(!env::WIN32 && !env::NETBSD && !env::OPENBSD);
 extern fn void setvbuf(CFile stream, char* buf, CInt type, usz size);
 extern fn SignalFunction signal(CInt sig, SignalFunction function);
 extern fn CInt snprintf(char* buffer, usz size, ZString format, ...);
@@ -203,15 +198,31 @@ macro CFile stdin() => __stdin;
 macro CFile stdout() => __stdout;
 macro CFile stderr() => __stderr;
 
-module libc @if(env::DARWIN);
+module libc @if(env::NETBSD || env::OPENBSD);
+extern fn int fcntl(CInt socket, int cmd, ...);
+extern fn int _setjmp(void*);
+macro int setjmp(void* ptr) => _setjmp(ptr);
+extern fn int _longjmp(void*, int);
+macro usz longjmp(void* ptr, CInt i) => _longjmp(ptr, i);
+extern fn usz malloc_size(void* ptr);
+extern fn void* aligned_alloc(usz align, usz size);
+macro CFile stdin() { return fdopen(0, "r"); }
+macro CFile stdout() { return fdopen(1, "w"); }
+macro CFile stderr() { return fdopen(2, "w"); }
+
+module libc @if(env::DARWIN || env::FREEBSD);
 extern CFile __stdinp;
 extern CFile __stdoutp;
 extern CFile __stderrp;
-extern fn usz malloc_size(void* ptr);
+extern fn usz malloc_size(void* ptr) @if(!env::FREEBSD);
 extern fn void* aligned_alloc(usz align, usz size);
 macro CFile stdin() => __stdinp;
 macro CFile stdout() => __stdoutp;
 macro CFile stderr() => __stderrp;
+
+module libc @if(env::FREEBSD);
+extern fn usz malloc_usable_size(void* ptr);
+macro usz malloc_size(void* ptr) => malloc_usable_size(ptr);
 
 module libc @if(env::WIN32);
 macro usz malloc_size(void* ptr) => _msize(ptr);
@@ -219,7 +230,7 @@ macro CFile stdin() => __acrt_iob_func(STDIN_FD);
 macro CFile stdout() => __acrt_iob_func(STDOUT_FD);
 macro CFile stderr() => __acrt_iob_func(STDERR_FD);
 
-module libc @if(env::LIBC && !env::WIN32 && !env::LINUX && !env::DARWIN);
+module libc @if(env::LIBC && !env::WIN32 && !env::LINUX && !env::DARWIN && !env::BSD_FAMILY);
 macro CFile stdin() { return (CFile*)(uptr)STDIN_FD; }
 macro CFile stdout() { return (CFile*)(uptr)STDOUT_FD; }
 macro CFile stderr() { return (CFile*)(uptr)STDERR_FD; }

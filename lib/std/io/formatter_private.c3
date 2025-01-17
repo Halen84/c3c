@@ -4,6 +4,34 @@ import std::math;
 const char[16] XDIGITS_H = "0123456789ABCDEF";
 const char[16] XDIGITS_L = "0123456789abcdef";
 
+fault FormattingFault
+{
+	BAD_FORMAT
+}
+
+fn usz! print_hex_chars(Formatter* f, char[] out, bool uppercase) @inline
+{
+	char past_10 = (uppercase ? 'A' : 'a') - 10;
+	usz len = 0;
+	foreach (c : out)
+	{
+		char digit = c >> 4;
+		f.out(digit + (digit < 10 ? '0' : past_10))!;
+		len++;
+		digit = c & 0xf;
+		f.out(digit + (digit < 10 ? '0' : past_10))!;
+		len++;
+	}
+	return len;
+}
+
+macro Formatter.first_err(&self, anyfault f)
+{
+	if (self.first_fault) return self.first_fault;
+	self.first_fault = f;
+	return f;
+}
+
 fn usz! Formatter.adjust(&self, usz len) @local
 {
 	if (!self.flags.left) return 0;
@@ -21,6 +49,7 @@ fn uint128! int_from_any(any arg, bool *is_neg) @private
 		case TypeKind.ENUM:
 			return int_from_any(arg.as_inner(), is_neg);
 		default:
+			break;
 	}
 	*is_neg = false;
 	switch (arg)
@@ -59,7 +88,7 @@ fn uint128! int_from_any(any arg, bool *is_neg) @private
 			double d = *arg;
 			return (uint128)((*is_neg = d < 0) ? -d : d);
 		default:
-			return PrintFault.INVALID_ARGUMENT_TYPE?;
+			return FormattingFault.BAD_FORMAT?;
 	}
 }
 
@@ -101,19 +130,19 @@ fn FloatType! float_from_any(any arg) @private
 		case double:
 			return (FloatType)*arg;
 		default:
-			return PrintFault.INVALID_ARGUMENT_TYPE?;
+			return FormattingFault.BAD_FORMAT?;
 	}
 }
 
 
-/**
- * Read a simple integer value, typically for formatting.
- *
- * @param [inout] len_ptr "the length remaining."
- * @param [in] buf "the buf to read from."
- * @param maxlen "the maximum len that can be read."
- * @return "The result of the atoi."
- **/
+<*
+ Read a simple integer value, typically for formatting.
+
+ @param [inout] len_ptr "the length remaining."
+ @param [in] buf "the buf to read from."
+ @param maxlen "the maximum len that can be read."
+ @return "The result of the atoi."
+*>
 fn uint simple_atoi(char* buf, usz maxlen, usz* len_ptr) @inline @private
 {
 	uint i = 0;
@@ -201,8 +230,7 @@ fn usz! Formatter.floatformat(&self, FloatFormatting formatting, double y) @priv
 		// Add padding
 		if (!self.flags.left) len += self.pad(' ', self.width, 3 + pl)!;
 		String s = self.flags.uppercase ? "INF" : "inf";
-		if (y != y) s = self.flags.uppercase ? "NAN" : "nan";
-		len += s.len;
+		if (math::is_nan(y)) s = self.flags.uppercase ? "NAN" : "nan";
 		if (pl) len += self.out(is_neg ? '-' : '+')!;
 		len += self.out_chars(s)!;
 		if (self.flags.left) len += self.pad(' ', self.width, 3 + pl)!;
@@ -588,12 +616,15 @@ fn usz! Formatter.ntoa_format(&self, String buf, usz len, bool negative, uint ba
 fn usz! Formatter.ntoa_any(&self, any arg, uint base) @private
 {
 	bool is_neg;
-	uint128 val = int_from_any(arg, &is_neg)!!;
-	return self.ntoa(val, is_neg, base) @inline;
+	return self.ntoa(int_from_any(arg, &is_neg)!!, is_neg, base) @inline;
 }
 
 fn usz! Formatter.out_char(&self, any arg) @private
 {
+	if (!arg.type.kindof.is_int())
+	{
+		return self.out_substr("<NOT CHAR>");
+	}
 	usz len = 1;
 	uint l = 1;
 	// pre padding
@@ -630,7 +661,7 @@ fn usz! Formatter.out_reverse(&self, char[] buf) @private
 	// pad spaces up to given width
 	if (!self.flags.zeropad && !self.flags.left)
 	{
-    	n += self.pad(' ', self.width, len)!;
+		n += self.pad(' ', self.width, len)!;
 	}
 	// reverse string
 	while (len) n += self.out(buf[--len])!;
@@ -640,17 +671,6 @@ fn usz! Formatter.out_reverse(&self, char[] buf) @private
 	return n;
 }
 
-fn void! printf_advance_format(usz format_len, usz *index_ptr) @inline @private
-{
-	usz val = ++(*index_ptr);
-	if (val >= format_len) return FormattingFault.UNTERMINATED_FORMAT?;
-}
-
-fn any! next_any(any* args_ptr, usz args_len, usz* arg_index_ptr) @inline @private
-{
-	if (*arg_index_ptr >= args_len) return FormattingFault.MISSING_ARG?;
-	return args_ptr[(*arg_index_ptr)++];
-}
 
 fn int! printf_parse_format_field(
 	any* args_ptr, usz args_len, usz* args_index_ptr,
@@ -659,9 +679,11 @@ fn int! printf_parse_format_field(
 	char c = format_ptr[*index_ptr];
 	if (c.is_digit()) return simple_atoi(format_ptr, format_len, index_ptr);
 	if (c != '*') return 0;
-	printf_advance_format(format_len, index_ptr)!;
-	any val = next_any(args_ptr, args_len, args_index_ptr)!;
-	if (!val.type.kindof.is_int()) return FormattingFault.INVALID_WIDTH_ARG?;
+	usz len = ++(*index_ptr);
+	if (len >= format_len) return FormattingFault.BAD_FORMAT?;
+	if (*args_index_ptr >= args_len) return FormattingFault.BAD_FORMAT?;
+	any val = args_ptr[(*args_index_ptr)++];
+	if (!val.type.kindof.is_int()) return FormattingFault.BAD_FORMAT?;
 	uint! intval = types::any_to_int(val, int);
-	return intval ?? FormattingFault.INVALID_WIDTH_ARG?;
+	return intval ?? FormattingFault.BAD_FORMAT?;
 }

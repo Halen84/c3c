@@ -1,7 +1,7 @@
 module testing;
 import std::io;
 
-fn void! main()
+fn void main()
 {
     String[] s1;
     String[] s2;
@@ -25,7 +25,7 @@ macro deep_print(a)
             io::print("{");
             $foreach ($i, $m : $typeof(a).membersof)
                 if ($i > 0) io::print(", ");
-                deep_print(a.$eval($m.nameof));
+                deep_print($m.get(a));
             $endforeach
             io::print("}");
         $default:

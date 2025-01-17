@@ -1,5 +1,331 @@
 # C3C Release Notes
 
+## 0.6.7 Change list
+
+### Changes / improvements
+- None yet.
+
+### Fixes
+- Fix issue requiring prefix on a generic interface declaration.
+- Fix bug in SHA1 for longer blocks #1854.
+- Fix lack of location for reporting lambdas with missing return statement #1857.
+- Compiler allows a generic module to be declared with different parameters #1856.
+
+### Stdlib changes
+- Added '%h' and '%H' for printing out binary data in hexadecimal using the formatter.
+- Added weakly linked `__powidf2`
+
+## 0.6.6 Change list
+
+### Changes / improvements
+- Split help into normal and "full" help, #1703
+- Removed 'headers' command line option.
+- Add `enum.from_ordinal` and `fault.from_ordinal`
+- Deprecate cast-style conversion from integer <-> enum.
+- Make deprecation an error in test mode.
+- Add `--win-vs-dirs` to override VS detection dirs.
+- Add `"name"` project property to override the name of the resulting binary. #1719
+- Improved `add-project` to take arguments.
+- Improve error reporting when using type names as the function argument #1750.
+- Improve ordering of method registration to support adding methods to generic modules with method constraints #1746
+- Support experimental `@operator(construct)` operator overload.
+- Allow using 'var' to declare lambdas in functions.
+- Add 'validation' setting and make dead code a warning.
+- Allow compile time `$foreach` iteration over constant Strings and bytes.
+- Improved error message when accessing `@private` from other modules #1769.
+- Include `@name` when searching for possible matches to `name` in the error message. #1779
+- Improve `@param` parse errors #1777
+- Improved `#foo` resolution inside of the compiler.
+- Deprecated '&' macro arguments.
+- Deprecate `fn void! main() type main functions.
+- Deprecate old `void!` @benchmark and @test functions.
+- Allow test runners to take String[] arguments.
+- Added `--lsp` output.
+- Improve the error message when running out of memory.
+- Allowed passing arguments to @test / @benchmark runners via `c3c test[benchmark] -- -o --opt1 <arg1>`
+- Handle bytes and string literals the same way in terms of zero termination.
+- Function comments are stored and displayed with -P.
+- Prevent `#hash` arguments from taking code that modifies ct variables. #1794
+- Make stringify to recursively enter `#hash` expressions #1834.
+
+### Fixes
+- Fix case trying to initialize a `char[*]*` from a String.
+- Fix Map & HashMap `put_all_for_create` not copying all elements, causing `init_from_map` to create incomplete copy.
+- Fix bug when a macro calling an extern function was called in another module also declaring and calling the same function. #1690
+- `static-lib` and `dynamic-lib` options from the command line now produces headers.
+- Fix bug outputting exported functions without predefined extname.
+- Fix problem where crt1 was linked for dynamic libraries on Linux and BSD. #1710
+- Fix CRT detection on Arch Linux.
+- Fix lexer allowing a trailing underscore (_) with hex and binary literals.
+- Fix `--list-operators` CLI command printing underscore (_) and hash (#).
+- Fix bug in temp allocator when temp memory is exhausted and allocation needs overaligned mem. #1715
+- Incorrectly handles distinct enums and pointers with '+=' and '-=' #1717.
+- Prevent DString from being initialized with "".
+- Fix bug in OnStackAllocator when freeing overallocated data. #1720
+- Use `weak_odr` rather than `weak` on Windows which seems to prevent issues such as #1704.
+- Use `weak` on dyn-symbols on Linux.
+- Fix crash on project.json not having an empty set of targets.
+- Miscompile when indexing an array with small unsigned types for enums.
+- Change CBool to be 1 byte.
+- `any_to_int` checks value to be int and no longer works with enum.
+- Add check in formatter printing "%c".
+- Fix bug where `!!` and `!` was not recognized to jump out of the current scope.
+- Fix bug when including compile time parameters in trailing body more than once.
+- Fix issue with compiling a constant struct containing a string array in a local context.
+- Fix error where panic would not properly stop the program when stacktrace couldn't be printed #1751.
+- Macros with default arguments to `&`, `#` and type parameters didn't work as expected. #1754.
+- `net::poll()` with negative timeout behaved incorrectly.
+- Return type inference bugs with macros #1757
+- `$defined` in a global scope should accept testing normal macros.
+- Assert on add to uninitialized ct variable #1765.
+- Dynamic function lookup fails after changing type without dummy anycast #1761
+- $vasplat was allowed inside of a function when passed as an argument to a function.
+- Prohibit raw vaargs in regular functions with a function body.
+- Assert on certain slice to slice casts. #1768.
+- Fix vector float -> bool conversion.
+- Fix `+a = 1` erronously being accepted.
+- Fix not freeing a zero length String
+- Macros with trailing bodys aren't allowed as the single statement after a while loop with no body #1772.
+- Deref subscripts as needed for macro ref method arguments. #1789
+- Change ordering to simplify adding methods to type in conditional modules.
+- `#foo` style arguments were not type checked when given a type. #1790
+- Bug when using +++ on value build a slice or array: the rhs cast was not done.
+- Fix bug preventing compile time slices from being iterated over with `$foreach`.
+- Fix bug with defer assignment in macro #1807.
+- Fix regression with swizzle references for vectors #1810.
+- Assert when partially initializing a constant struct containing a slice #1812.
+- Assert concatenating constant slices #1805.
+- Do not link "ld" on Linux with no libc.
+- Fix bug when multiple `$else` clauses followed an `$if` #1824.
+- Report the correct type as not having a method when access fails #1828.
+- Prevent temp arena scribbling from causing an asan warning. #1825
+- Fix bug where `&i[0] = null` was not detected to be an error #1833.
+
+### Stdlib changes
+- Increase BitWriter.write_bits limit up to 32 bits.
+- Updates to `Slice2d`, like `get_xy` and others.
+- Added `iter()` `value_iter()` and `key_iter()` to HashMap.
+- Add "tokenizer" to String.
+- Add "skip_empty" to split methods. Add split_to_buffer method.
+- Add `@enum_from_value`.
+- Updated hash function.
+- Added URL parser.
+- Added convenience functions to `Maybe`.
+- Added `String.trim_left()` and `.trim_right()`.
+- Deprecation of several `&` macros.
+- Format functions for timedates.
+- Add `@assert_leak()` to assert on memory leaks in the scope.
+- Added `double.set_high_word()`, `double.set_low_word()`, and `float.set_word()`.
+
+## 0.6.5 Change list
+
+### Changes / improvements
+- Allow splat in initializers.
+- Init command will now add `test-sources` to `project.json` #1520
+- `a++` may be discarded if `a` is optional and ++/-- works for overloaded operators.
+- Improve support for Windows cross compilation on targets with case sensitive file systems.
+- Add "sources" support to library `manifest.json`, defaults to root folder if unspecified.
+- Add char_at method in DString and operators [], len, []= and &[].
+- Add `-q` option, make `--run-once` implicitly `-q`.
+- Add `-v`, `-vv` and `-vvv` options for increasing verbosity, replacing debug-log and debug-stats options.
+
+### Fixes
+- Fix bug where `a > 0 ? f() : g()` could cause a compiler crash if both returned `void!`.
+- `@builtin` was not respected for generic modules #1617.
+- Fix issue writing a single byte in the WriteBuffer
+- A distinct inline pointer type can now participate in pointer arithmetics.
+- Support &a[0] returning the distinct type when applying it to a distinct of a pointer.
+- Fix error when calling `HashMap.remove` on uninitialized `HashMap`.
+- Fix issue with resolved try-unwrap in defer.
+- Fix issue with overloaded subscript and ++/-- and assign ops (e.g. `*=`)
+- Fix issue with properties in different targets not being respected #1633.
+- Indexing an Optional slice would crash in codegen #1636.
+- SimpleHeapAllocator bug when splitting blocks allowed memory overrun.
+- Not possible to alias or take reference for extension methods on non-user defined types. #1637
+- Prevent methods from using names of properties or fields. #1638
+- b64 / hex data strings can now be used with \` as well.
+- Contracts on generic modules would evaluate too late, sometimes not catching the error until it already occurred elsewhere.
+- Fix bug preventing optionals from being used in ranges or as indices.
+- Crash compiling for arm64 when returning 16 byte and smaller structs by value not a power of 2 #1649.
+- Enforce single module compilation for static libraries to make constructors run properly.
+- Crash when using --no-obj without compile-only. #1653
+- Do not produce expression locations for windows.
+- Issue where multiple methods were accepted for the same type.
+- Issue where a method was linked to a type alias instead of the underlying type.
+- Fix Fnv1a encoding.
+- Fix issue with accessing arrays in access-overloaded types, e.g. `list[1][2]` #1665.
+- Cast removing arbitrary array indices and converting them to pointers should always be fine #1664
+- Incorrect "no-libc" definition of `cos`, making it unavailable for wasm.
+- Fix issue with the adjoint and inverse calculations for `Matrix2x2`.
+- It was possible to create 0 length arrays using byte literals. #1678
+- Crash when a constant null typeid is checked for properties. #1679
+
+### Stdlib changes
+- Add `io::MultiReader`, `io::MultiWriter`, and `io::TeeReader` structs.
+- Updated Base32 API.
+- Add `file::save`.
+- Add `memcpy` / `memset` / `memcmp` to nolibc.
+- Add `sort::quickselect` to find the k-th smallest element in an unordered list.
+- Add `sort::is_sorted` to determine if a list is sorted.
+- Implement RFC 3986 for url encoding and decoding.
+
+## 0.6.4 Change list
+
+### Changes / improvements
+- Const vector -> const slice implicit conversion.
+- Slicing arrays, slices and bytes at compile time #1466.
+- Better error for `int a[4] = ...`. #1518
+- Better error for `int Foo(int a)` declarations #1516
+- Improve error message in the case of `MyInterface x = foo;` #1522
+- Deprecate `@adhoc`, allow non-nested ad hoc generic types.
+- Constant bytes <=> char[] conversion should work #1514.
+- Infer now works across ternary.
+- Interfaces now support .ptr and .type directly without casting to `any`.
+- Switch to `<* *>` docs.
+- Improve error messages on expressions like `var $type = int;` #1553.
+- Disallow casting a `void*` to `any` or an interface, unless it is `null`.
+- Defer resolution of declarations when looked up in `def` aliased #1559.
+- Adding constants to the Json AST #1540
+- Adding info to the globals inside Json AST #1541
+- Null-check function pointer invocation #1573.
+- `string::new_struct_to_str` and `io::struct_to_format` to dump struct data.
+- `io::print` will now print structs.
+- Improve error message when using `void` aliases as variable storage type.
+- Add a target type: "prepare" which doesn't compile anything (but may run `exec`)
+- Improve error message on incorrect inner struct/union name #1847.
+
+### Fixes
+- `Unsupported int[*] $x = { 1, 2, 3, 4 }` #1489.
+- Unexpected compile error using a typed constant with `copysign` #1517
+- Incorrect subscript resolution #1519.
+- Segfault with passing a program with `-` using stdin.
+- Using no module with `-` would reject the program.
+- Unintended deref of pointers with methods caused regression with hash function.
+- Fix broken sincos function.
+- Bug when a continue is copied in a defer.
+- Compiler error when any/interface initialized using {} #1533.
+- Bug when defers and $if were combined in a macro, which would cause miscompilation.
+- Fixes to the CSV reader.
+- Crash returning struct or vector from function using ternary expression #1537.
+- Improved error message on invalid subscript index type #1535.
+- Improved error message when declaring a variable `void!`.
+- Cannot use void as a generic parameter #1546
+- Interfaces not correctly copied with generics #1545
+- Memory leak in keys.new_list fixed.
+- Standard library is now correctly weakly linked, fixing the use of C3 .so together with executable. #1549, #1107.
+- Wrong error message for interface methods with body #1536.
+- Empty expression block would crash compiler with debug on #1554.
+- Improve infer conversions on constants, e.g. `ZString a = foo ? "a" : "b";` #1561
+- Show error when declarations do not start with `fn` in interfaces. #1565
+- `if (try foo)` was handled incorrectly inside a defer.
+- `&self` argument not implicitly null checked. #1556.
+- `(uptr)&((Foo*)null).a` incorrectly inserts a null check. #1544
+- Incorrect error message when `$eval` is provided an invalid string. #1570
+- `HashMap.copy_keys` did not properly copy keys which needed to be allocated #1569
+- Named vector component access would not fold at compile time. #1574
+- `$define` would occasionally not properly evaluate declarations it encountered.
+- Fixes with error handling recursive `@tag` #1583.
+- Sometimes generating introspection info would not be in the global scope causing a crash #1586.
+- @tag on macros cannot be retrieved with tagof #1582
+- Taking the $typeof of a wildcard optional returns `void!`.
+- Fix bug with enums with jump tables #1840.
+- Enum associated declarations accidentally allowed declaration in function style. #1841
+- Quicksort and insertsort incorrectly allowing arrays and vectors by value. #1845.
+
+### Stdlib changes
+- Remove unintended print of `char[]` as String
+- Add read/write to stream with big endian ints.
+- Move accidently hidden "wrap_bytes".
+- Added CBool #1530.
+- Added encoding/base32 module.
+
+## 0.6.3 Change list
+
+### Changes / improvements
+- Introduce `arg: x` named arguments instead of `.arg = x`, deprecate old style.
+- Support splat for varargs #1352.
+- Allow `var` in lambdas in macros.
+- Support `int[*] { 1, 2, 3 }` expressions.
+- Support inline struct designated init as if inline was anonymous.
+- Introduce the `.paramsof` property.
+- Support environment variable 'C3C_LIB' to find the standard library.
+- Support environment variable 'C3C_CC' to find the default C compiler.
+- Support casting bitstructs to bool.
+- Allow user-defined attributes to have typed parameters.
+- Add `.gitkeep` files to project subfolders.
+- Add `env::COMPILER_BUILD_HASH` and `env::COMPILER_BUILD_DATE`
+- Support linking .o files in compilation command. #1417
+- Slicing constant strings at compile time works.
+- Add `project fetch` subcommand to fetch missing project dependencies (general and target specific)
+- Ability of `vendor-fetch` to download the dependencies in the first specified path `dependencies-search-path`
+- Ability of `vendor-fetch` to register the fetched dependencies in the project file.
+- Allow the "self" parameter to be $/# for macro methods.
+- Support compile time slicing of untyped lists.
+- Allow specifying an import module using `@wasm` #1305.
+- Deprecated inline generic types outside of struct definitions and macros unless marked `@adhoc`.
+- Improved method detection in earlier stages of checking.
+- Allow `@norecurse` attribute for non-recursive imports #1480.
+- wasm32 / wasm64 targets are use-libc=no by default.
+- Add hash/sha256 module 
+
+### Fixes
+- Issue where a lambda wasn't correctly registered as external. #1408
+- Generic methods were incorrectly registered as functions, leading to naming collisions. #1402
+- Deprecated tuple / triple types.
+- Converting a slice to a vector/array would copy too little data.
+- Crash when reading an empty 'manifest.json'.
+- "optsize" did not work correctly in project.json.
+- `l[0].a = 1` now supported for overloads due to better lvalue handling #1357.
+- Asserts are retained regardless of optimization when running tests.
+- Limit object filename lengths. #1415
+- Fix regression for `$include`.
+- Correct '.so' suffix on dynamic libraries on Linux.
+- Fix bug where inline index access to array in a struct would crash the compiler.
+- Asserts are now correctly included and traced in when running tests.
+- Use atexit to fix finalizers on Windows #1361.
+- Fix bugs in "trap-on-wrap" #1434.
+- Bug with casting anyfault to error.
+- Lambda / function type would accidentally be processed as a method.
+- Fix error message when not finding a particular function.
+- Crash invoking a `@body` argument with the wrong number of parameters.
+- Fix reordering semantics in struct assignment.
+- Regression when passing types as `#expr` arguments. #1461
+- Temp allocator overwrites data when doing reset on extra allocated pages. #1462
+- User defined attributes could not have more than 1 parameter due to bug.
+- Folding a constant array of structs at compile time would cause an assert.
+- Enum attributes would be overwritten by enum value attributes.
+- LLVM issue with try when bool is combined #1467.
+- Segfault using ternary with no assignment #1468.
+- Inner types make some errors misleading #1471.
+- Fix bug when passing a type as a compile time value.
+- Fix bug due to enum associated values not being checked for liveness.
+- Regression when compile time accessing a union field not last assigned to.
+- Safer seed of rand() for WASM without libc.
+- Bad error message aliasing an ident with a path. #1481.
+- Error when slicing a struct with an inline array #1488.
+- Improved error messages on `Foo a = foo { 1 };` #1496
+- Bug in json decoder escape handling.
+- Fix bug when reading zip manifest, that would not return a zero terminated string. #1490
+- Fix thread tests.
+- Detect recursion errors on non-recursive mutexes in safe mode.
+- Foreach over distinct pointer failed to be caught as error #1506.
+- Foreach over distinct iterable would ignore operator(len).
+- Compiler crash when compiling c code in a library without --obj-out #1503.
+
+### Stdlib changes
+- Additional init functions for hashmap.
+- `format` functions are now functions and work better with splat.
+- Add support for the QOI format.
+- Add `io::read_new_fully` for reading to the end of a stream.
+- Add `io::wrap_bytes` for reading bytes with `io` functions.
+- Add `rnd` and `rand_in_range` default random functions.
+- Additional timezone related functions for `datetime`.
+- Added MD5 and crypto::safe_compare.
+- Added generic HMAC.
+- Added generic PBKDF2 implementation.
+- DString `reverse`.
+- `DString.insert_at` now has variants for other types.
+
 ## 0.6.2 Change list
 
 ### Changes / improvements
@@ -17,13 +343,27 @@
 - Permit foreach values to be optional.
 - Add `--show-backtrace` option to disable backtrace for even smaller binary.
 - Untested Xtensa support.
-- `$expand` macro, to expand a string into code.
 - && doesn't work correctly with lambdas #1279.
 - Fix incorrect override of optimization levels when using projects.
 - Add experimental `@noalias` attribute.
 - Add a `--run-once` option to delete the output file after running it.
 - Add `@const` attribute for macros, for better error messages with constant macros.
 - Add `wincrt` setting to libraries.
+- Add `+++` `&&&` `|||` as replacement for `$concat`, `$and` and `$or`.
+- Add `methodsof` to type info for struct, union and bitstruct.
+- Added `@tag` `tagof` and `has_tagof` to user defined types and members.
+- Added `c-include-dirs` project/manifest setting.
+- The compiler now skips UTF8 BOM.
+- Printable values passed to the Formatter as pointers, will print as if passed by value.
+- Pointers are rendered with "0x" prefix when passed to '%s'.
+- Add temp allocator scribble.
+- Use PIC by default on Linux.
+- `$exec` may now provide a stdin parameter.
+- Introduce `$vaarg[...]` syntax and deprecate the old `$vaarg(...)`.
+- Similar change to `$vasplat`: `$vasplat` and `$vasplat[1..]`.
+- Add `$member.get(value)` to replace `value.$eval($member.nameof)`
+- Improve the error message when the compilation does not produce any files #1390.
+- Add `fmod` implementation for nolibc.
 
 ### Fixes
 
@@ -38,10 +378,66 @@
 - Distinct func type would not accept direct function address assign. #1287
 - Distinct inline would not implement protocol if the inlined implemented it. #1292
 - Distinct inline can now be called if it is aliasing a function pointer.
+- Bug in List add_array when reserving memory.
+- Fix issue where a compile time parameter is followed by "...".
+- Fix issue with some conversions to untyped list.
+- Issue where a `if (catch e = ...)` in a defer would be incorrectly copied. Causing codegen error.
+- Variable in if-try / if-catch cannot be a reused variable name.
+- Vararg interfaces were broken.
+- LLVM codegen for constants in enums could fail.
+- Fixes to the socket functions.
+- Improved output when pointer is out of range.
+- Better error when casting to a distinct fails.
+- With single module, name the .o file after what `-o` provides. #1306
+- Bitstruct members can now have attributes.
+- `%` analysis was incorrect for int vectors.
+- When resolving inherited interfaces, the interface type wasn't always resolved.
+- Fix issues when checking methods and interfaces hasn't been resolved yet.
+- Fix Vec2.angle
+- Update to libc::setjmp on Win32, to do no stack unwinding.
+- Recursively follow interfaces when looking up method.
+- Int128 alignment change in LLVM fixed on x64.
+- Fix interface lazy resolution errors.
+- Interface resolution when part of generics #1348.
+- Assert not properly traced #1354.
+- Ordering issues with `$include` / `$exec` fixed #1302.
+- Issues with wincrt linking.
+- Debug info with recursive canonical type usage could cause segfault.
+- Missing check on optional left hand side for `s.x`.
+- Incorrect zero analysis on `foo["test"] = {}` #1360.
+- Bug converting untyped list #1360.
+- Benchmark / test no longer suppresses debug info. #1364.
+- Bug when compile time subtracting a distinct type.
+- `insert_at` incorrectly prevented inserts at the end of a list.
+- Fix aligned alloc for Win32 targets.
+- Compiler didn't detect when a module name was used both as a generic and regular module.
+- Assigning a const zero to an aliased distinct caused an error.
+- `--path` is now properly respected.
+- `--test` will now provide the full filename and the column.
+- Fix of bug in `defer (catch err)` with a direct return error.
+- Too restrictive compile time checks for @const.
+- Fixes to wasm nolibc in the standard library.
+- Fixed int128 div/mod.
+- Fix WASM memory init priority.
+- Fix bug with `defer (catch err)` when used together with regular defer.
+- Methods can now properly be aliased using `def` #1393.
+- Memory leak in Object when not using temp allocators.
+- Tracking allocator would double the allocations in the report.
+- `printf` will now show errors in the output when there are errors.
+- Bug where `if try` would work incorrectly in a macro.
+- Prevent loading / storing large structs with LLVM.
 
 ### Stdlib changes
 
-None
+- `send` and `recv` added to `libc` for Posix / Win32.
+- Add support to destroy temp allocators.
+- Deprecated `path.append`, `path.tappend`, `getcwd`, `tgetcwd`, `path.absolute`, `ls`.
+- Deprecated `env::get_config_dir`, replaced by `env::new_get_config_dir`.
+- Added `path.has_extension`, `path.new_append`, `path.temp_append`, `new_cwd`, `temp_cwd`, `path.new_absolute`, `new_ls`, `temp_ls`.
+- Added `dstring.replace`
+- New hashmap type, `Map`
+- Added `ElasticArray`.
+- Added `types::is_signed`, `types::is_unsigned` and `types::inner_type`.
 
 ## 0.6.1 Change list
 
@@ -67,6 +463,7 @@ None
 - Added `--list-manifest-properties` to list the available properties in `manifest.json`.
 - Indexing into a constant array / struct now works at compile time.
 - Improved error message when trying user foreach with an untyped list.
+- RISCV asm support.
 
 ### Fixes
 - Error with unsigned compare in `@ensure` when early returning 0 #1207.
@@ -97,6 +494,7 @@ None
 - Reference parameter doesn't work with vector subscript #1250.
 - The msvc_sdk script failed to work properly on windows when run in folders with spaces.
 - Using winmain would call the wrong definition #1265.
+- DynamicArenaAllocator would not correctly free.
 
 ### Stdlib changes
 - Added `remove_first_item` `remove_last_item` and `remove_item` as aliases for the `match` functions.

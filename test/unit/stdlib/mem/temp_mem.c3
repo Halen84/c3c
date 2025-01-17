@@ -11,7 +11,7 @@ fn String add(String s, Allocator a, int x)
     };
     ulong* y = mem::temp_alloc(ulong);
     *y = 0xAAAA_AAAA_AAAA_AAAA;
-    return tmp.concat("a", .allocator = a);
+    return tmp.concat("a", allocator: a);
 }
 
 fn String breakit(String s, Allocator a)
@@ -57,12 +57,12 @@ fn String inner4(String s, Allocator a)
     };
 }
 
-fn void! test_temp_allocator() @test
+fn void test_temp_allocator() @test
 {
     assert("foofoofoofoofoofooabcaaaaaa" == add("abc", allocator::temp(), 5), "was %s", add("abc", allocator::temp(), 5));
 }
 
-fn void! test_temp_allocator2() @test
+fn void test_temp_allocator2() @test
 {
     assert("fooxyz0123456789xy**********" == breakit("xyz0123456789", allocator::temp()));
 }

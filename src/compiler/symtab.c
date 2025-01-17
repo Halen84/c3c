@@ -47,9 +47,11 @@ const char *kw_at_pure;
 const char *kw_at_require;
 const char *kw_at_return;
 const char *kw_at_jump;
+const char *kw_construct;
 const char *kw_in;
 const char *kw_inout;
 const char *kw_len;
+const char *kw_libc;
 const char *kw_main;
 const char *kw_memcmp;
 const char *kw_mainstub;
@@ -105,8 +107,8 @@ void symtab_init(uint32_t capacity)
 			default:
 				break;
 		}
-		assert(type == i);
-		assert(symtab_add(name, (uint32_t)strlen(name), fnv1a(name, len), &type) == interned);
+		ASSERT0(type == i);
+		ASSERT0(symtab_add(name, (uint32_t)strlen(name), fnv1a(name, len), &type) == interned);
 	}
 
 	// Init some constant idents
@@ -132,8 +134,10 @@ void symtab_init(uint32_t capacity)
 	kw_IoError = KW_DEF("IoError");
 
 	type = TOKEN_IDENT;
+	kw_construct = KW_DEF("construct");
 	kw_in = KW_DEF("in");
 	kw_inout = KW_DEF("inout");
+	kw_libc = KW_DEF("libc");
 	kw_mainstub = KW_DEF("_$main");
 	kw_main = KW_DEF("main");
 	kw_memcmp = KW_DEF("memcmp");
@@ -160,6 +164,8 @@ void symtab_init(uint32_t capacity)
 	type_property_list[TYPE_PROPERTY_ASSOCIATED] = KW_DEF("associated");
 	type_property_list[TYPE_PROPERTY_ELEMENTS] = KW_DEF("elements");
 	type_property_list[TYPE_PROPERTY_EXTNAMEOF] = KW_DEF("extnameof");
+	type_property_list[TYPE_PROPERTY_FROM_ORDINAL] = KW_DEF("from_ordinal");
+	type_property_list[TYPE_PROPERTY_GET] = KW_DEF("get");
 	type_property_list[TYPE_PROPERTY_INF] = KW_DEF("inf");
 	type_property_list[TYPE_PROPERTY_INNER] = KW_DEF("inner");
 	type_property_list[TYPE_PROPERTY_IS_EQ] = KW_DEF("is_eq");
@@ -167,14 +173,18 @@ void symtab_init(uint32_t capacity)
 	type_property_list[TYPE_PROPERTY_IS_SUBSTRUCT] = KW_DEF("is_substruct");
 	type_property_list[TYPE_PROPERTY_KINDOF] = KW_DEF("kindof");
 	type_property_list[TYPE_PROPERTY_MEMBERSOF] = KW_DEF("membersof");
+	type_property_list[TYPE_PROPERTY_METHODSOF] = KW_DEF("methodsof");
 	type_property_list[TYPE_PROPERTY_NAMEOF] = KW_DEF("nameof");
 	type_property_list[TYPE_PROPERTY_NAMES] = KW_DEF("names");
 	type_property_list[TYPE_PROPERTY_NAN] = KW_DEF("nan");
 	type_property_list[TYPE_PROPERTY_PARAMS] = KW_DEF("params");
+	type_property_list[TYPE_PROPERTY_PARAMSOF] = KW_DEF("paramsof");
 	type_property_list[TYPE_PROPERTY_PARENTOF] = KW_DEF("parentof");
 	type_property_list[TYPE_PROPERTY_QNAMEOF] = KW_DEF("qnameof");
 	type_property_list[TYPE_PROPERTY_RETURNS] = KW_DEF("returns");
 	type_property_list[TYPE_PROPERTY_SIZEOF] = KW_DEF("sizeof");
+	type_property_list[TYPE_PROPERTY_TAGOF] = KW_DEF("tagof");
+	type_property_list[TYPE_PROPERTY_HAS_TAGOF] = KW_DEF("has_tagof");
 	type_property_list[TYPE_PROPERTY_VALUES] = KW_DEF("values");
 
 	builtin_list[BUILTIN_ABS] = KW_DEF("abs");
@@ -285,17 +295,17 @@ void symtab_init(uint32_t capacity)
 
 	for (unsigned i = 0; i < NUMBER_OF_BUILTINS; i++)
 	{
-		assert(builtin_list[i] && "Missing builtin");
+		ASSERT0(builtin_list[i] && "Missing builtin");
 	}
 
 	for (unsigned i = 0; i < NUMBER_OF_TYPE_PROPERTIES; i++)
 	{
-		assert(type_property_list[i] && "Missing type property");
+		ASSERT0(type_property_list[i] && "Missing type property");
 	}
 
 	for (unsigned i = 0; i < NUMBER_OF_BUILTIN_DEFINES; i++)
 	{
-		assert(builtin_defines[i] && "Missing builtin define");
+		ASSERT0(builtin_defines[i] && "Missing builtin define");
 	}
 
 	type = TOKEN_AT_IDENT;
@@ -307,6 +317,7 @@ void symtab_init(uint32_t capacity)
 	kw_at_require = KW_DEF("@require");
 	kw_at_return = KW_DEF("@return");
 	kw_at_jump = KW_DEF("@jump");
+	attribute_list[ATTRIBUTE_ADHOC] = KW_DEF("@adhoc");
 	attribute_list[ATTRIBUTE_ALIGN] = KW_DEF("@align");
 	attribute_list[ATTRIBUTE_BENCHMARK] = KW_DEF("@benchmark");
 	attribute_list[ATTRIBUTE_BIGENDIAN] = KW_DEF("@bigendian");
@@ -332,7 +343,9 @@ void symtab_init(uint32_t capacity)
 	attribute_list[ATTRIBUTE_NOINIT] = KW_DEF("@noinit");
 	attribute_list[ATTRIBUTE_NOINLINE] = KW_DEF("@noinline");
 	attribute_list[ATTRIBUTE_NOPADDING] = KW_DEF("@nopadding");
+	attribute_list[ATTRIBUTE_NORECURSE] = KW_DEF("@norecurse");
 	attribute_list[ATTRIBUTE_NORETURN] = KW_DEF("@noreturn");
+	attribute_list[ATTRIBUTE_NOSANITIZE] = KW_DEF("@nosanitize");
 	attribute_list[ATTRIBUTE_NOSTRIP] = KW_DEF("@nostrip");
 	attribute_list[ATTRIBUTE_OBFUSCATE] = KW_DEF("@obfuscate");
 	attribute_list[ATTRIBUTE_OPERATOR] = KW_DEF("@operator");
@@ -346,6 +359,7 @@ void symtab_init(uint32_t capacity)
 	attribute_list[ATTRIBUTE_SAFEMACRO] = KW_DEF("@safemacro");
 	attribute_list[ATTRIBUTE_SECTION] = KW_DEF("@section");
 	attribute_list[ATTRIBUTE_TEST] = KW_DEF("@test");
+	attribute_list[ATTRIBUTE_TAG] = KW_DEF("@tag");
 	attribute_list[ATTRIBUTE_UNUSED] = KW_DEF("@unused");
 	attribute_list[ATTRIBUTE_USED] = KW_DEF("@used");
 	attribute_list[ATTRIBUTE_WASM] = KW_DEF("@wasm");
@@ -354,7 +368,7 @@ void symtab_init(uint32_t capacity)
 
 	for (unsigned i = 0; i < NUMBER_OF_ATTRIBUTES; i++)
 	{
-		assert(attribute_list[i] && "Missing attributes");
+		ASSERT0(attribute_list[i] && "Missing attributes");
 	}
 
 }
@@ -381,7 +395,7 @@ const char *symtab_preset(const char *data, TokenType type)
 	uint32_t len = (uint32_t)strlen(data);
 	TokenType result = type;
 	const char *res = symtab_add(data, len, fnv1a(data, len), &result);
-	assert(result == type);
+	ASSERT0(result == type);
 	return res;
 }
 
@@ -421,7 +435,7 @@ const char *symtab_add(const char *data, uint32_t len, uint32_t fnv1hash, TokenT
 
 void stable_init(STable *table, uint32_t initial_size)
 {
-	assert(initial_size && "Size must be larger than 0");
+	ASSERT0(initial_size && "Size must be larger than 0");
 	assert (is_power_of_two(initial_size) && "Must be a power of two");
 
 	SEntry *entries = CALLOC(initial_size * sizeof(Entry));
@@ -476,7 +490,7 @@ static inline void stable_resize(STable *table)
 
 void *stable_set(STable *table, const char *key, void *value)
 {
-	assert(value && "Cannot insert NULL");
+	ASSERT0(value && "Cannot insert NULL");
 	SEntry *entry = sentry_find(table->entries, table->capacity, key);
 	void *old = entry->value;
 	if (old == value) return old;
@@ -505,24 +519,18 @@ void *stable_get(STable *table, const char *key)
 
 void htable_init(HTable *table, uint32_t initial_size)
 {
-	assert(initial_size && "Size must be larger than 0");
+	ASSERT0(initial_size && "Size must be larger than 0");
 	size_t size = next_highest_power_of_2(initial_size);
 
 	size_t mem_size = initial_size * sizeof(HTEntry);
 	table->entries = calloc_arena(mem_size);
 
-	// Tap all pages
-	char *data = (char *)table->entries;
-	for (int i = 0; i < mem_size; i += 4096)
-	{
-		data[0] = 0;
-	}
 	table->mask = size - 1;
 }
 
 void *htable_set(HTable *table, void *key, void *value)
 {
-	assert(value && "Cannot insert NULL");
+	ASSERT0(value && "Cannot insert NULL");
 	uint32_t idx = (((uintptr_t)key) ^ ((uintptr_t)key) >> 8) & table->mask;
 	HTEntry **entry_ref = &table->entries[idx];
 	HTEntry *entry = *entry_ref;

@@ -113,7 +113,6 @@ const char *decl_to_a_name(Decl *decl)
 		case DECL_CT_ASSERT: return "a compile time assert";
 		case DECL_CT_ECHO: return "a compile time echo";
 		case DECL_CT_EXEC: return "compile time exec include";
-		case DECL_CT_EXPAND: return "compile time expand";
 		case DECL_CT_INCLUDE: return "an include";
 		case DECL_DECLARRAY: return "a declarray";
 		case DECL_DEFINE: case DECL_TYPEDEF: return "a define";
@@ -148,7 +147,7 @@ const char *decl_to_a_name(Decl *decl)
 				case VARDECL_PARAM_CT: return "a compile time parameter";
 				case VARDECL_PARAM_CT_TYPE: return "a compile time type parameter";
 				case VARDECL_PARAM_EXPR: return "a expression parameter";
-				case VARDECL_PARAM_REF: return "a ref parameter";
+				case VARDECL_PARAM_REF: return "a ref parameter"; // DEPRECATED
 				case VARDECL_REWRAPPED: UNREACHABLE
 				case VARDECL_UNWRAPPED: return "an unwrapped variable";
 			}
@@ -173,9 +172,10 @@ Decl *decl_new_generated_var(Type *type, VarDeclKind kind, SourceSpan span)
 	decl->span = span;
 	decl->name = NULL;
 	decl->var.kind = kind;
+	decl->var.is_temp = true;
 	decl->type = type;
 	decl->alignment = type ? type_alloca_alignment(type) : 0;
-	assert(!type || !type_is_user_defined(type) || type->decl->resolve_status == RESOLVE_DONE);
+	ASSERT0(!type || !type_is_user_defined(type) || type->decl->resolve_status == RESOLVE_DONE);
 	decl->var.type_info = type_info_id_new_base(type, span);
 	decl->resolve_status = RESOLVE_DONE;
 	return decl;
@@ -193,6 +193,9 @@ BinaryOp binary_op[TOKEN_LAST + 1] = {
 		[TOKEN_SHR] = BINARYOP_SHR,
 		[TOKEN_AND] = BINARYOP_AND,
 		[TOKEN_OR] = BINARYOP_OR,
+		[TOKEN_CT_AND] = BINARYOP_CT_AND,
+		[TOKEN_CT_OR] = BINARYOP_CT_OR,
+		[TOKEN_CT_CONCAT] = BINARYOP_CT_CONCAT,
 		[TOKEN_QUESTQUEST] = BINARYOP_ELSE,
 		[TOKEN_AMP] = BINARYOP_BIT_AND,
 		[TOKEN_BIT_OR] = BINARYOP_BIT_OR,
@@ -295,22 +298,14 @@ void decl_append_links_to_global(Decl *decl)
 	CompilationUnit *unit = decl->unit;
 	if (unit && unit->links)
 	{
-		FOREACH(const char *, link, unit->links) global_context_add_link(link);
+		FOREACH(const char *, link, unit->links) linking_add_link(&compiler.linking, link);
 		unit->links = NULL; // Don't register twice
 	}
-	if (decl->has_link)
+	if (decl->attrs_resolved && decl->attrs_resolved->links)
 	{
-		FOREACH(Attr *, attr, decl->attributes)
+		FOREACH(const char *, link, decl->attrs_resolved->links)
 		{
-			if (attr->attr_kind != ATTRIBUTE_LINK) continue;
-			if (!attr->exprs) continue;
-			unsigned args = vec_size(attr->exprs);
-			for (unsigned i = 0; i < args; i++)
-			{
-				Expr *string = attr->exprs[i];
-				if (!string) continue;
-				global_context_add_link(string->const_expr.bytes.ptr);
-			}
+			linking_add_link(&compiler.linking, link);
 		}
 	}
 }
@@ -344,9 +339,9 @@ bool ast_is_compile_time(Ast *ast)
 		case AST_RETURN_STMT:
 		case AST_BLOCK_EXIT_STMT:
 			if (!ast->return_stmt.expr) return true;
-			return expr_is_constant_eval(ast->return_stmt.expr, CONSTANT_EVAL_CONSTANT_VALUE);
+			return expr_is_runtime_const(ast->return_stmt.expr);
 		case AST_EXPR_STMT:
-			return expr_is_compile_time(ast->expr_stmt);
+			return expr_is_runtime_const(ast->expr_stmt);
 		case AST_COMPOUND_STMT:
 		{
 			AstId current = ast->compound_stmt.first_stmt;
@@ -364,6 +359,32 @@ bool ast_is_compile_time(Ast *ast)
 bool decl_is_externally_visible(Decl *decl)
 {
 	return decl->is_external_visible || decl->visibility == VISIBLE_PUBLIC || decl->is_export;
+}
+
+bool decl_is_global(Decl *ident)
+{
+	switch (ident->var.kind)
+	{
+		case VARDECL_LOCAL:
+			return ident->var.is_static;
+		case VARDECL_CONST:
+		case VARDECL_GLOBAL:
+			return true;
+		case VARDECL_PARAM:
+		case VARDECL_MEMBER:
+		case VARDECL_BITMEMBER:
+		case VARDECL_PARAM_REF: // DEPRECATED
+		case VARDECL_PARAM_EXPR:
+		case VARDECL_UNWRAPPED:
+		case VARDECL_ERASE:
+		case VARDECL_REWRAPPED:
+		case VARDECL_PARAM_CT:
+		case VARDECL_PARAM_CT_TYPE:
+		case VARDECL_LOCAL_CT:
+		case VARDECL_LOCAL_CT_TYPE:
+			return false;
+	}
+	UNREACHABLE
 }
 
 bool decl_is_local(Decl *decl)
@@ -401,8 +422,6 @@ AlignSize decl_find_member_offset(Decl *decl, Decl *member)
 	switch (decl->decl_kind)
 	{
 		case DECL_BITSTRUCT:
-			members = decl->bitstruct.members;
-			break;
 		case DECL_STRUCT:
 		case DECL_UNION:
 			members = decl->strukt.members;
@@ -410,7 +429,7 @@ AlignSize decl_find_member_offset(Decl *decl, Decl *member)
 		default:
 			return NO_MATCH;
 	}
-	assert(members);
+	ASSERT0(members);
 	unsigned list = vec_size(members);
 	for (unsigned i = 0; i < list; i++)
 	{

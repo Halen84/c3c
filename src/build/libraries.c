@@ -4,21 +4,28 @@
 #define MANIFEST_FILE "manifest.json"
 
 const char *manifest_default_keys[][2] = {
+		{"sources", "Paths to library sources for targets, such as interface files."},
 		{"c-sources", "Set the C sources to be compiled."},
+		{"c-include-dirs", "Set the include directories for C sources."},
 		{"cc", "Set C compiler (defaults to 'cc')."},
 		{"cflags", "C compiler flags."},
 		{"dependencies", "List of C3 libraries to also include."},
 		{"exec", "Scripts run for all platforms."},
 		{"provides", "The library name"},
 		{"targets", "The map of supported platforms"},
+		{"vendor", "Vendor specific extensions, ignored by c3c."},
 		{"wincrt", "Windows CRT linking: none, static, dynamic."}
 };
 
 const int manifest_default_keys_count = ELEMENTLEN(manifest_default_keys);
 
 const char *manifest_target_keys[][2] = {
+		{"sources", "Additional library sources to be compiled for this target."},
+		{"sources-override", "Paths to library sources for this target, overriding global settings."},
 		{"c-sources", "Additional C sources to be compiled for the target."},
 		{"c-sources-override", "C sources to be compiled, overriding global settings."},
+		{"c-include-dirs", "C source include directories for the target."},
+		{"c-include-dirs-override", "Additional C source include directories for the target, overriding global settings."},
 		{"cc", "Set C compiler (defaults to 'cc')."},
 		{"cflags", "Additional C compiler flags for the target."},
 		{"cflags-override", "C compiler flags for the target, overriding global settings."},
@@ -26,6 +33,7 @@ const char *manifest_target_keys[][2] = {
 		{"exec", "Scripts to also run for the target."},
 		{"linked-libraries", "Libraries linked by the linker for this target, overriding global settings."},
 		{"link-args", "Linker arguments for this target."},
+		{"vendor", "Vendor specific extensions, ignored by c3c."},
 		{"wincrt", "Windows CRT linking: none, static, dynamic."}
 };
 
@@ -33,7 +41,7 @@ const char *manifest_target_keys[][2] = {
 const int manifest_target_keys_count = ELEMENTLEN(manifest_target_keys);
 
 const char *manifest_deprecated_target_keys[] = {
-		"c-sources-add", "cflags-add", "linkflags", "linked-libs" };
+		"c-sources-add", "c-include-dirs-add", "cflags-add", "linkflags", "linked-libs" };
 
 const int manifest_deprecated_target_key_count = ELEMENTLEN(manifest_deprecated_target_keys);
 
@@ -44,12 +52,11 @@ static inline void parse_library_type(Library *library, LibraryTarget ***target_
 {
 	if (!object) return;
 	if (object->type != J_OBJECT) error_exit("Expected a set of targets in %s.", library->dir);
-	for (size_t i = 0; i < object->member_len; i++)
+	FOREACH_IDX(i, JSONObject *, member, object->members)
 	{
-		JSONObject *member = object->members[i];
 		const char *key = object->keys[i];
 		if (member->type != J_OBJECT) error_exit("Expected a list of properties for a target in %s.", library->dir);
-		check_json_keys(manifest_target_keys, manifest_target_keys_count, manifest_deprecated_target_keys, manifest_deprecated_target_key_count, member, key, "--list-library-properties");
+		check_json_keys(manifest_target_keys, manifest_target_keys_count, manifest_deprecated_target_keys, manifest_deprecated_target_key_count, member, key, "--list-manifest-properties");
 		LibraryTarget *library_target = CALLOCS(LibraryTarget);
 		library_target->parent = library;
 		library_target->win_crt = WIN_CRT_DEFAULT;
@@ -68,28 +75,32 @@ static inline void parse_library_type(Library *library, LibraryTarget ***target_
 static inline void parse_library_target(Library *library, LibraryTarget *target, const char *target_name,
                                         JSONObject *object)
 {
-	target->link_flags = get_string_array(library->dir, target_name, object, "linkflags", false);
+	target->link_flags = get_string_array(library->dir, target_name, object, "link-args", false);
 	if (!target->link_flags)
 	{
-		target->link_flags = get_string_array(library->dir, target_name, object, "link-args", false);
+		target->link_flags = get_string_array(library->dir, target_name, object, "linkflags", false);
 	}
-	target->linked_libs = get_string_array(library->dir, target_name, object, "linked-libs", false);
+	target->linked_libs = get_string_array(library->dir, target_name, object, "linked-libraries", false);
 	if (!target->linked_libs)
 	{
-		target->linked_libs = get_string_array(library->dir, target_name, object, "linked-libraries", false);
+		target->linked_libs = get_string_array(library->dir, target_name, object, "linked-libs", false);
 	}
 	target->dependencies = get_string_array(library->dir, target_name, object, "dependencies", false);
 	target->execs = get_string_array(library->dir, target_name, object, "exec", false);
 	target->cc = get_string(library->dir, target_name, object, "cc", library->cc);
 	target->cflags = get_cflags(library->dir, target_name, object, library->cflags);
+	target->source_dirs = library->source_dirs;
 	target->csource_dirs = library->csource_dirs;
+	target->cinclude_dirs = library->cinclude_dirs;
 	target->win_crt = (WinCrtLinking)get_valid_string_setting(library->dir, target_name, object, "wincrt", wincrt_linking, 0, 3, "'none', 'static' or 'dynamic'.");
+	get_list_append_strings(library->dir, target_name, object, &target->source_dirs, "sources", "sources-override", "sources-add");
 	get_list_append_strings(library->dir, target_name, object, &target->csource_dirs, "c-sources", "c-sources-override", "c-sources-add");
+	get_list_append_strings(library->dir, target_name, object, &target->cinclude_dirs, "c-include-dirs", "c-include-dirs-override", "c-include-dirs-add");
 }
 
 static Library *add_library(JSONObject *object, const char *dir)
 {
-	check_json_keys(manifest_default_keys, manifest_default_keys_count, NULL, 0, object, "library", "--list-library-properties");
+	check_json_keys(manifest_default_keys, manifest_default_keys_count, NULL, 0, object, "library", "--list-manifest-properties");
 	Library *library = CALLOCS(Library);
 	library->dir = dir;
 	const char *provides = get_mandatory_string(dir, NULL, object, "provides");
@@ -106,8 +117,10 @@ static Library *add_library(JSONObject *object, const char *dir)
 	library->cc = get_optional_string(dir, NULL, object, "cc");
 	library->cflags = get_cflags(library->dir, NULL, object, NULL);
 	library->win_crt = (WinCrtLinking)get_valid_string_setting(library->dir, NULL, object, "wincrt", wincrt_linking, 0, 3, "'none', 'static' or 'dynamic'.");
+	get_list_append_strings(library->dir, NULL, object, &library->source_dirs, "sources", "sources-override", "sources-add");
 	get_list_append_strings(library->dir, NULL, object, &library->csource_dirs, "c-sources", "c-sources-override", "c-sources-add");
-	parse_library_type(library, &library->targets, json_obj_get(object, "targets"));
+	get_list_append_strings(library->dir, NULL, object, &library->cinclude_dirs, "c-include-dirs", "c-include-dirs-override", "c-include-dirs-add");
+	parse_library_type(library, &library->targets, json_map_get(object, "targets"));
 	return library;
 }
 
@@ -158,11 +171,15 @@ INLINE void zip_check_err(const char *lib, const char *error)
 INLINE JSONObject* read_manifest(const char *lib, const char *manifest_data)
 {
 	JsonParser parser;
-	json_init_string(&parser, manifest_data, &malloc_arena);
+	json_init_string(&parser, manifest_data);
 	JSONObject *json = json_parse(&parser);
 	if (parser.error_message)
 	{
 		error_exit("Error on line %d reading '%s':'%s'", parser.line, lib, parser.error_message);
+	}
+	if (!json)
+	{
+		error_exit("Empty 'manifest.json' for library '%s'.", lib);
 	}
 	return json;
 }
@@ -234,7 +251,7 @@ void resolve_libraries(BuildTarget *build_target)
 		DEBUG_LOG("Search '.'");
 		file_add_wildcard_files(&c3_libs, ".", false, &c3lib_suffix, 1);
 	}
-	Library *libraries[MAX_LIB_DIRS * 2];
+	Library *libraries[MAX_BUILD_LIB_DIRS * 2];
 	size_t lib_count = 0;
 	FOREACH(const char *, lib, c3_libs)
 	{
@@ -249,7 +266,7 @@ void resolve_libraries(BuildTarget *build_target)
 			size_t size;
 			json = read_manifest(lib, file_read_all(manifest_path, &size));
 		}
-		if (lib_count == MAX_LIB_DIRS * 2) error_exit("Too many libraries added, exceeded %d.", MAX_LIB_DIRS * 2);
+		if (lib_count == MAX_BUILD_LIB_DIRS * 2) error_exit("Too many libraries added, exceeded %d.", MAX_BUILD_LIB_DIRS * 2);
 		libraries[lib_count++] = add_library(json, lib);
 	}
 	FOREACH(const char *, lib_name, build_target->libs)
@@ -261,11 +278,38 @@ void resolve_libraries(BuildTarget *build_target)
 		Library *library = libraries[i];
 		LibraryTarget *target = library->target_used;
 		if (!target) continue;
+		if (target->win_crt != WIN_CRT_DEFAULT)
+		{
+			if (build_target->win.crt_linking == WIN_CRT_DEFAULT)
+			{
+				build_target->win.crt_linking = library->win_crt;
+			}
+			else if (target->win_crt != build_target->win.crt_linking)
+			{
+				WARNING("'wincrt' mismatch between resolved build setting ('%s') and library '%s' ('%s'), "
+						"library settings will be ignored.",
+						wincrt_linking[build_target->win.crt_linking],
+						library->dir,
+						wincrt_linking[target->win_crt]);
+			}
+		}
 		if (vec_size(target->csource_dirs))
 		{
-			vec_add(build_target->ccompling_libraries, target);
+			vec_add(build_target->ccompiling_libraries, target);
 		}
-		file_add_wildcard_files(&build_target->sources, library->dir, false, c3_suffix_list, 3);
+		if (target->source_dirs)
+		{
+			const char **files = target_expand_source_names(library->dir, target->source_dirs, c3_suffix_list, &build_target->object_files, 3, true);
+			FOREACH(const char *, file, files)
+			{
+				vec_add(build_target->sources, file);
+			}
+		}
+		else
+		{
+			// fallback if sources doesn't exist
+			file_add_wildcard_files(&build_target->sources, library->dir, false, c3_suffix_list, 3);
+		}
 		vec_add(build_target->library_list, library);
 		const char *libdir = file_append_path(library->dir, arch_os_target[build_target->arch_os_target]);
 		if (file_is_dir(libdir)) vec_add(build_target->linker_libdirs, libdir);
@@ -278,12 +322,12 @@ void resolve_libraries(BuildTarget *build_target)
 		FOREACH(const char *, exec, library->execs)
 		{
 			printf("] Execute '%s' for library '%s':", exec, library->provides);
-			puts(execute_cmd(exec, false));
+			puts(execute_cmd(exec, false, NULL));
 		}
 		FOREACH(const char *, exec, target->execs)
 		{
 			printf("] Execute '%s' for library '%s':", exec, library->provides);
-			puts(execute_cmd(exec, false));
+			puts(execute_cmd(exec, false, NULL));
 		}
 	}
 }

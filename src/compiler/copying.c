@@ -9,7 +9,6 @@ static inline void *fixup(CopyStruct *c, void *original);
 INLINE void fixup_decl(CopyStruct *c, Decl **decl_ref);
 INLINE void fixup_declid(CopyStruct *c, DeclId *declid_ref);
 INLINE ConstInitializer **copy_const_initializer_list(CopyStruct *c, ConstInitializer **initializer_list);
-INLINE ConstInitializer **copy_const_initializer_array(CopyStruct *c, ConstInitializer **initializer_list, unsigned len);
 
 static Expr **copy_expr_list(CopyStruct *c, Expr **expr_list);
 static Expr *copy_expr(CopyStruct *c, Expr *source_expr);
@@ -169,7 +168,7 @@ TypeInfo *copy_type_info_single(TypeInfo *type_info)
 
 Ast *copy_ast_macro(Ast *source_ast)
 {
-	assert(copy_struct.copy_in_use);
+	ASSERT0(copy_struct.copy_in_use);
 	return ast_copy_deep(&copy_struct, source_ast);
 }
 
@@ -192,8 +191,20 @@ Expr *copy_expr_single(Expr *source_expr)
 
 void copy_range(CopyStruct *c, Range *range)
 {
-	MACRO_COPY_EXPRID(range->start);
-	MACRO_COPY_EXPRID(range->end);
+	switch (range->range_type)
+	{
+		case RANGE_CONST_LEN:
+		case RANGE_CONST_END:
+			MACRO_COPY_EXPRID(range->start);
+			return;
+		case RANGE_CONST_RANGE:
+			return;
+		case RANGE_DYNAMIC:
+			MACRO_COPY_EXPRID(range->start);
+			MACRO_COPY_EXPRID(range->end);
+			return;
+	}
+	UNREACHABLE
 }
 
 INLINE ConstInitializer **copy_const_initializer_list(CopyStruct *c, ConstInitializer **initializer_list)
@@ -207,20 +218,9 @@ INLINE ConstInitializer **copy_const_initializer_list(CopyStruct *c, ConstInitia
 	return initializer;
 }
 
-INLINE ConstInitializer **copy_const_initializer_array(CopyStruct *c, ConstInitializer **initializer_list, unsigned len)
-{
-	ConstInitializer **initializer = MALLOC(sizeof(ConstInitializer*) * len);
-	for (unsigned i = 0; i < len; i++)
-	{
-		ConstInitializer *element = initializer_list[i];
-		copy_const_initializer(c, &element);
-		initializer[i] = element;
-	}
-	return initializer;
-}
-
 static inline void copy_const_initializer(CopyStruct *c, ConstInitializer **initializer_ref)
 {
+	if (!*initializer_ref) return;
 	ConstInitializer *copy = MALLOCS(ConstInitializer);
 	*copy = **initializer_ref;
 	*initializer_ref = copy;
@@ -230,7 +230,7 @@ static inline void copy_const_initializer(CopyStruct *c, ConstInitializer **init
 		case CONST_INIT_ZERO:
 			return;
 		case CONST_INIT_STRUCT:
-			copy->init_struct = copy_const_initializer_array(c, copy->init_struct, vec_size(type_flatten(copy->type)->decl->strukt.members));
+			copy->init_struct = copy_const_initializer_list(c, copy->init_struct);
 			return;
 		case CONST_INIT_UNION:
 			copy_const_initializer(c, &copy->init_union.element);
@@ -259,6 +259,9 @@ INLINE Expr *copy_const_expr(CopyStruct *c, Expr *expr)
 		case CONST_INTEGER:
 		case CONST_BOOL:
 			break;
+		case CONST_REF:
+			fixup_decl(c, &expr->const_expr.global_ref);
+			break;
 		case CONST_ENUM:
 		case CONST_ERR:
 			fixup_decl(c, &expr->const_expr.enum_err_val);
@@ -269,6 +272,9 @@ INLINE Expr *copy_const_expr(CopyStruct *c, Expr *expr)
 			break;
 		case CONST_POINTER:
 		case CONST_TYPEID:
+			break;
+		case CONST_SLICE:
+			copy_const_initializer(c, &expr->const_expr.slice_init);
 			break;
 		case CONST_INITIALIZER:
 			copy_const_initializer(c, &expr->const_expr.initializer);
@@ -288,10 +294,14 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 	Expr *expr = expr_copy(source_expr);
 	switch (source_expr->expr_kind)
 	{
+		case EXPR_TYPECALL:
 		case EXPR_ANYSWITCH:
 			UNREACHABLE
 		case EXPR_OTHER_CONTEXT:
 			MACRO_COPY_EXPR(expr->expr_other_context.inner);
+			return expr;
+		case EXPR_NAMED_ARGUMENT:
+			MACRO_COPY_EXPR(expr->named_argument_expr.value);
 			return expr;
 		case EXPR_EMBED:
 			MACRO_COPY_EXPR(expr->embed_expr.len);
@@ -316,8 +326,17 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 				MACRO_COPY_DECL(expr->lambda_expr);
 			}
 			return expr;
+		case EXPR_MEMBER_GET:
+			fixup_decl(c, &source_expr->member_get_expr);
+			break;
 		case EXPR_SWIZZLE:
 			MACRO_COPY_EXPRID(expr->swizzle_expr.parent);
+			return expr;
+		case EXPR_EXT_TRUNC:
+			MACRO_COPY_EXPR(expr->ext_trunc_expr.inner);
+			return expr;
+		case EXPR_INT_TO_BOOL:
+			MACRO_COPY_EXPR(expr->int_to_bool_expr.inner);
 			return expr;
 		case EXPR_NOP:
 		case EXPR_BUILTIN:
@@ -346,6 +365,7 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 		case EXPR_TRY_UNWRAP:
 			if (expr->resolve_status != RESOLVE_DONE)
 			{
+				MACRO_COPY_EXPR(expr->try_unwrap_expr.variable);
 				MACRO_COPY_EXPR(expr->try_unwrap_expr.init);
 				MACRO_COPY_TYPE(expr->try_unwrap_expr.type);
 			}
@@ -358,7 +378,14 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 				}
 				else
 				{
-					MACRO_COPY_DECL(expr->try_unwrap_expr.decl);
+					if (expr->try_unwrap_expr.optional)
+					{
+						MACRO_COPY_DECL(expr->try_unwrap_expr.decl);
+					}
+					else
+					{
+						fixup_decl(c, &expr->try_unwrap_expr.decl);
+					}
 				}
 			}
 			return expr;
@@ -366,8 +393,17 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 			MACRO_COPY_EXPR_LIST(expr->try_unwrap_chain_expr);
 			return expr;
 		case EXPR_CATCH_UNWRAP:
+			if (expr->resolve_status == RESOLVE_DONE)
+			{
+				MACRO_COPY_DECL(expr->catch_unwrap_expr.decl);
+				MACRO_COPY_EXPR(expr->catch_unwrap_expr.lhs);
+			}
+			else
+			{
+				MACRO_COPY_TYPE(expr->catch_unwrap_expr.type);
+				MACRO_COPY_EXPR(expr->catch_unwrap_expr.variable);
+			}
 			MACRO_COPY_EXPR_LIST(expr->catch_unwrap_expr.exprs);
-			MACRO_COPY_TYPE(expr->catch_unwrap_expr.type);
 			return expr;
 		case EXPR_IDENTIFIER:
 			if (expr->resolve_status == RESOLVE_DONE)
@@ -377,7 +413,7 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 			return expr;
 		case EXPR_CT_IDENT:
 		case EXPR_HASH_IDENT:
-			assert(expr->resolve_status != RESOLVE_DONE);
+			ASSERT0(expr->resolve_status != RESOLVE_DONE);
 			return expr;
 		case EXPR_BENCHMARK_HOOK:
 		case EXPR_TEST_HOOK:
@@ -399,10 +435,13 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 		case EXPR_SUBSCRIPT_ASSIGN:
 			UNREACHABLE
 		case EXPR_SLICE:
-		case EXPR_SUBSCRIPT:
+			MACRO_COPY_EXPRID(expr->slice_expr.expr);
+			copy_range(c, &expr->slice_expr.range);
+			return expr;
 		case EXPR_SUBSCRIPT_ADDR:
+		case EXPR_SUBSCRIPT:
 			MACRO_COPY_EXPRID(expr->subscript_expr.expr);
-			copy_range(c, &expr->subscript_expr.range);
+			MACRO_COPY_EXPRID(expr->subscript_expr.index.expr);
 			return expr;
 		case EXPR_ASM:
 			switch (expr->expr_asm_arg.kind)
@@ -430,12 +469,36 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 		case EXPR_CT_AND_OR:
 			MACRO_COPY_EXPR_LIST(expr->ct_and_or_expr.args);
 			return expr;
-		case EXPR_FORCE_UNWRAP:
-		case EXPR_OPTIONAL:
-		case EXPR_STRINGIFY:
 		case EXPR_CT_EVAL:
 		case EXPR_CT_IS_CONST:
+		case EXPR_FORCE_UNWRAP:
+		case EXPR_OPTIONAL:
+		case EXPR_SPLAT:
+		case EXPR_STRINGIFY:
+		case EXPR_PTR_ACCESS:
+		case EXPR_VECTOR_TO_ARRAY:
+		case EXPR_SLICE_TO_VEC_ARRAY:
+		case EXPR_SCALAR_TO_VECTOR:
+		case EXPR_ENUM_FROM_ORD:
+		case EXPR_INT_TO_FLOAT:
+		case EXPR_INT_TO_PTR:
+		case EXPR_PTR_TO_INT:
+		case EXPR_FLOAT_TO_INT:
+		case EXPR_SLICE_LEN:
+		case EXPR_DISCARD:
+		case EXPR_ANYFAULT_TO_FAULT:
+		case EXPR_VECTOR_FROM_ARRAY:
+		case EXPR_RVALUE:
+		case EXPR_RECAST:
+		case EXPR_ADDR_CONVERSION:
 			MACRO_COPY_EXPR(expr->inner_expr);
+			return expr;
+		case EXPR_MAKE_ANY:
+			MACRO_COPY_EXPR(expr->make_any_expr.inner);
+			MACRO_COPY_EXPR(expr->make_any_expr.typeid);
+			return expr;
+		case EXPR_MAKE_SLICE:
+			MACRO_COPY_EXPR(expr->make_slice_expr.ptr);
 			return expr;
 		case EXPR_DEFAULT_ARG:
 			MACRO_COPY_EXPR(expr->default_arg_expr.inner);
@@ -499,9 +562,9 @@ Expr *copy_expr(CopyStruct *c, Expr *source_expr)
 			MACRO_COPY_EXPR_LIST(expr->call_expr.arguments);
 			if (expr->call_expr.varargs)
 			{
-				if (expr->call_expr.splat_vararg)
+				if (expr->call_expr.va_is_splat)
 				{
-					MACRO_COPY_EXPR(expr->call_expr.splat);
+					MACRO_COPY_EXPR(expr->call_expr.vasplat);
 				}
 				else
 				{
@@ -552,6 +615,7 @@ void doc_ast_copy(CopyStruct *c, AstContractStmt *doc)
 		case CONTRACT_PARAM:
 		case CONTRACT_PURE:
 		case CONTRACT_UNKNOWN:
+		case CONTRACT_COMMENT:
 			break;
 	}
 }
@@ -574,9 +638,6 @@ RETRY:
 			break;
 		case AST_DECLS_STMT:
 			MACRO_COPY_DECL_LIST(ast->decls_stmt);
-			break;
-		case AST_CT_EXPAND_STMT:
-			MACRO_COPY_EXPR(ast->expr_stmt);
 			break;
 		case AST_CONTRACT_FAULT:
 			if (ast->contract_fault.resolved)
@@ -696,6 +757,7 @@ RETRY:
 			MACRO_COPY_EXPRID(ast->nextcase_stmt.expr);
 			break;
 		case AST_NOP_STMT:
+		case AST_ASM_LABEL:
 			break;
 		case AST_BLOCK_EXIT_STMT:
 		case AST_RETURN_STMT:
@@ -731,20 +793,20 @@ Ast **copy_ast_list(CopyStruct *c, Ast **to_copy)
 void copy_begin(void)
 {
 	copy_struct.current_fixup = copy_struct.fixups;
-	assert(!copy_struct.copy_in_use);
+	ASSERT0(!copy_struct.copy_in_use);
 	copy_struct.copy_in_use = true;
 	copy_struct.single_static = false;
 }
 
 void copy_end(void)
 {
-	assert(copy_struct.copy_in_use);
+	ASSERT0(copy_struct.copy_in_use);
 	copy_struct.copy_in_use = false;
 }
 
 Decl **copy_decl_list_macro(Decl **decl_list)
 {
-	assert(copy_struct.copy_in_use);
+	ASSERT0(copy_struct.copy_in_use);
 	return copy_decl_list(&copy_struct, decl_list);
 }
 
@@ -756,19 +818,39 @@ Decl **copy_decl_list_single(Decl **decl_list)
 	return result;
 }
 
+INLINE Attr *copy_attribute(CopyStruct *c, Attr *attr)
+{
+	if (!attr) return NULL;
+	Attr *copy = MALLOCS(Attr);
+	*copy = *attr;
+	MACRO_COPY_EXPR_LIST(copy->exprs);
+	return copy;
+}
+
 static Attr **copy_attributes(CopyStruct *c, Attr** attr_list)
 {
 	if (!attr_list) return attr_list;
 	Attr** list = NULL;
 	FOREACH(Attr *, attribute, attr_list)
 	{
-
-		Attr *copy = MALLOCS(Attr);
-		*copy = *attribute;
-		MACRO_COPY_EXPR_LIST(copy->exprs);
-		vec_add(list, copy);
+		vec_add(list, copy_attribute(c, attribute));
 	}
 	return list;
+}
+
+
+static ResolvedAttrData *copy_attrs_resolved(CopyStruct *c, ResolvedAttrData *data)
+{
+	if (!data) return NULL;
+	ResolvedAttrData *copy = MALLOCS(ResolvedAttrData);
+	*copy = (ResolvedAttrData) {
+			.tags = copy_attributes(c, data->tags),
+			.deprecated = data->deprecated,
+			.links = data->links,
+			.section = data->section,
+			.wasm_module = data->wasm_module
+	};
+	return copy;
 }
 
 Attr **copy_attributes_single(Attr** attr_list)
@@ -828,19 +910,19 @@ TypeInfo *copy_type_info(CopyStruct *c, TypeInfo *source)
 		case TYPE_INFO_EVALTYPE:
 		case TYPE_INFO_TYPEOF:
 		case TYPE_INFO_VATYPE:
-			assert(source->resolve_status == RESOLVE_NOT_DONE);
+			ASSERT0(source->resolve_status == RESOLVE_NOT_DONE);
 			copy->unresolved_type_expr = copy_expr(c, source->unresolved_type_expr);
 			return copy;
 		case TYPE_INFO_VECTOR:
 		case TYPE_INFO_ARRAY:
-			assert(source->resolve_status == RESOLVE_NOT_DONE);
+			ASSERT0(source->resolve_status == RESOLVE_NOT_DONE);
 			copy->array.len = copy_expr(c, source->array.len);
 			copy->array.base = copy_type_info(c, source->array.base);
 			return copy;
 		case TYPE_INFO_INFERRED_ARRAY:
 		case TYPE_INFO_SLICE:
 		case TYPE_INFO_INFERRED_VECTOR:
-			assert(source->resolve_status == RESOLVE_NOT_DONE);
+			ASSERT0(source->resolve_status == RESOLVE_NOT_DONE);
 			copy->array.base = copy_type_info(c, source->array.base);
 			return copy;
 		case TYPE_INFO_POINTER:
@@ -882,7 +964,14 @@ Decl *copy_decl(CopyStruct *c, Decl *decl)
 	if (c->single_static && decl_is_resolved_static_var(decl)) return decl;
 	Decl *copy = decl_copy(decl);
 	copy_reg_ref(c, decl, copy);
-	copy->attributes = copy_attributes(c, copy->attributes);
+	if (decl->resolved_attributes)
+	{
+		copy->attrs_resolved = copy_attrs_resolved(c, copy->attrs_resolved);
+	}
+	else
+	{
+		copy->attributes = copy_attributes(c, copy->attributes);
+	}
 	switch (decl->decl_kind)
 	{
 		case DECL_POISONED:
@@ -890,12 +979,10 @@ Decl *copy_decl(CopyStruct *c, Decl *decl)
 		case DECL_ERASED:
 			break;
 		case DECL_INTERFACE:
+			copy_decl_type(copy);
 			MACRO_COPY_TYPE_LIST(copy->interfaces);
 			MACRO_COPY_DECL_LIST(copy->methods);
 			MACRO_COPY_DECL_LIST(copy->interface_methods);
-			break;
-		case DECL_CT_EXPAND:
-			MACRO_COPY_EXPR(copy->expand_decl);
 			break;
 		case DECL_CT_EXEC:
 			MACRO_COPY_EXPR(copy->exec_decl.filename);
@@ -910,6 +997,7 @@ Decl *copy_decl(CopyStruct *c, Decl *decl)
 		case DECL_UNION:
 		case DECL_STRUCT:
 			copy_decl_type(copy);
+			fixup_declid(c, &copy->strukt.parent);
 			MACRO_COPY_TYPE_LIST(copy->interfaces);
 			MACRO_COPY_DECL_LIST(copy->strukt.members);
 			MACRO_COPY_DECLID(copy->strukt.padded_decl_id);
@@ -920,9 +1008,10 @@ Decl *copy_decl(CopyStruct *c, Decl *decl)
 			UNREACHABLE
 		case DECL_BITSTRUCT:
 			copy_decl_type(copy);
+			fixup_declid(c, &copy->strukt.parent);
 			MACRO_COPY_TYPE_LIST(copy->interfaces);
-			MACRO_COPY_DECL_LIST(copy->bitstruct.members);
-			MACRO_COPY_TYPE(copy->bitstruct.base_type);
+			MACRO_COPY_DECL_LIST(copy->strukt.members);
+			MACRO_COPY_TYPE(copy->strukt.container_type);
 			MACRO_COPY_DECL_LIST(copy->methods);
 			break;
 		case DECL_ENUM:
@@ -949,7 +1038,8 @@ Decl *copy_decl(CopyStruct *c, Decl *decl)
 			switch (copy->var.kind)
 			{
 				case VARDECL_UNWRAPPED:
-					MACRO_COPY_DECL(copy->var.alias);
+				case VARDECL_REWRAPPED:
+					fixup_decl(c, &copy->var.alias);
 					break;
 				case VARDECL_BITMEMBER:
 					if (copy->var.bit_is_expr)
@@ -1008,14 +1098,12 @@ Decl *copy_decl(CopyStruct *c, Decl *decl)
 			decl->attr_decl.attrs = copy_attributes(c, decl->attr_decl.attrs);
 			break;
 		case DECL_DEFINE:
-			switch (decl->define_decl.define_kind)
+			if (decl->resolve_status == RESOLVE_DONE)
 			{
-				case DEFINE_IDENT_GENERIC:
-					MACRO_COPY_EXPR_LIST(decl->define_decl.generic_params);
-					break;
-				case DEFINE_IDENT_ALIAS:
-					break;
+				fixup_decl(c, &decl->define_decl.alias);
+				break;
 			}
+			MACRO_COPY_EXPR(decl->define_decl.alias_expr);
 			break;
 	}
 	return copy;

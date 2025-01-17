@@ -7,15 +7,41 @@
 
 
 
-typedef enum
-{
-	PRINT_TYPE_ERROR,
-	PRINT_TYPE_NOTE,
-	PRINT_TYPE_WARN
-} PrintType;
 
 #define LINES_SHOWN 4
 #define MAX_WIDTH 120
+
+static void eprint_escaped_string(const char *message)
+{
+	fputc('"', stderr);
+	char c;
+	while ((c = *(message++)) != 0)
+	{
+		switch (c)
+		{
+			case '\t':
+				fputs("\\t", stderr);
+				break;
+			case '\r':
+				break;
+			case '|':
+				fputs("\\x7c", stderr);
+				break;
+			case '\"':
+				fputs("\\\"", stderr);
+				break;
+			case '\\':
+				fputs("\\\\", stderr);
+				break;
+			case '\n':
+				fputs("\\n", stderr);
+				break;
+			default:
+				fputc(c, stderr);
+		}
+	}
+	fputc('"', stderr);
+}
 
 static void print_error_type_at(SourceSpan location, const char *message, PrintType print_type)
 {
@@ -25,18 +51,42 @@ static void print_error_type_at(SourceSpan location, const char *message, PrintT
 		return;
 	}
 	File *file = source_file_by_id(location.file_id);
-	if (active_target.test_output || active_target.benchmark_output)
+	if (compiler.build.lsp_output)
+	{
+		eprintf("> LSPERR|");
+		switch (print_type)
+		{
+			case PRINT_TYPE_ERROR:
+				eprintf("error");
+				break;
+			case PRINT_TYPE_NOTE:
+				eprintf("note");
+				break;
+			case PRINT_TYPE_WARN:
+				eprintf("warn");
+				break;
+			default:
+				UNREACHABLE
+		}
+		eprintf("|");
+		eprint_escaped_string(file->full_path);
+		eprintf("|%d|%d|", location.row, location.col);
+		eprint_escaped_string(message);
+		eprintf("\n");
+		return;
+	}
+	else if (compiler.build.test_output || compiler.build.benchmark_output)
 	{
 		switch (print_type)
 		{
 			case PRINT_TYPE_ERROR:
-				eprintf("Error|%s|%d|%s\n", file->name, location.row, message);
+				eprintf("Error|%s|%d|%d|%s\n", file->full_path, location.row, location.col, message);
 				return;
 			case PRINT_TYPE_NOTE:
 				// Note should not be passed on.
 				return;
 			case PRINT_TYPE_WARN:
-				eprintf("Warning|%s|%d|%s\n", file->name, location.row, message);
+				eprintf("Warning|%s|%d|%d|%s\n", file->full_path, location.row, location.col, message);
 				return;
 			default:
 				UNREACHABLE
@@ -152,16 +202,21 @@ static void print_error_type_at(SourceSpan location, const char *message, PrintT
 
 }
 
-static void vprint_error(SourceSpan location, const char *message, va_list args)
+static void vprint_msg(SourceSpan location, const char *message, va_list args, PrintType type)
 {
-	print_error_type_at(location, str_vprintf(message, args), PRINT_TYPE_ERROR);
+	print_error_type_at(location, str_vprintf(message, args), type);
 }
 
 
 void sema_verror_range(SourceSpan location, const char *message, va_list args)
 {
-	vprint_error(location, message, args);
-	global_context.errors_found++;
+	vprint_msg(location, message, args, PRINT_TYPE_ERROR);
+	compiler.context.errors_found++;
+}
+
+void sema_vwarn_range(SourceSpan location, const char *message, va_list args)
+{
+	vprint_msg(location, message, args, PRINT_TYPE_WARN);
 }
 
 void sema_warning_at(SourceSpan loc, const char *message, ...)
@@ -191,7 +246,7 @@ void print_error_after(SourceSpan loc, const char *message, ...)
 	va_end(list);
 }
 
-void sema_error_prev_at(SourceSpan loc, const char *message, ...)
+void sema_note_prev_at(SourceSpan loc, const char *message, ...)
 {
 	va_list args;
 	va_start(args, message);
@@ -208,9 +263,25 @@ void sema_error_prev_at(SourceSpan loc, const char *message, ...)
 }
 
 
+void sema_warn_prev_at(SourceSpan loc, const char *message, ...)
+{
+	va_list args;
+	va_start(args, message);
+#define MAX_ERROR_LEN 4096
+	char buffer[MAX_ERROR_LEN];
+	size_t written = vsnprintf(buffer, MAX_ERROR_LEN - 1, message, args);
+	// Ignore errors
+	if (written <= MAX_ERROR_LEN - 2)
+	{
+		print_error_type_at(loc, buffer, PRINT_TYPE_WARN);
+	}
+	va_end(args);
+	return;
+}
+
 void print_error(ParseContext *context, const char *message, ...)
 {
-	global_context.errors_found++;
+	compiler.context.errors_found++;
 	File *file = context->unit->file;
 	va_list list;
 	va_start(list, message);
@@ -243,7 +314,7 @@ void span_to_scratch(SourceSpan span)
 				break;
 		}
 	}
-	assert(row == row_to_find);
+	ASSERT0(row == row_to_find);
 	const char *start = current + col - 1;
 	bool last_was_whitespace = false;
 	for (uint32_t i = 0; i < length; i++)
@@ -283,7 +354,7 @@ const char *span_to_string(SourceSpan span)
 				break;
 		}
 	}
-	assert(row == row_to_find);
+	ASSERT0(row == row_to_find);
 	const char *start = current + col - 1;
 	return str_copy(start, length);
 }

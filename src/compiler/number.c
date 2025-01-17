@@ -49,18 +49,96 @@ static inline bool compare_fps(Real left, Real right, BinaryOp op)
 			UNREACHABLE
 	}
 }
+void expr_contract_array(ExprConst *expr_const, ConstKind contract_type)
+{
+	if (expr_const->const_kind == CONST_SLICE && !expr_const->slice_init)
+	{
+		*expr_const = (ExprConst) { .const_kind = contract_type };
+		return;
+	}
+	ASSERT0(expr_const->const_kind == CONST_INITIALIZER || expr_const->const_kind == CONST_SLICE);
+	ConstInitializer *initializer = expr_const->const_kind == CONST_SLICE
+			? expr_const->slice_init
+			: expr_const->initializer;
+	Type *type = initializer->type;
+	ASSERT0(type_is_any_arraylike(type));
+	ArraySize len = type->array.len;
+	ASSERT0(len > 0);
+	char *arr = calloc_arena(len);
+	switch (initializer->kind)
+	{
+		case CONST_INIT_ZERO:
+			break;
+		case CONST_INIT_STRUCT:
+		case CONST_INIT_UNION:
+		case CONST_INIT_VALUE:
+		case CONST_INIT_ARRAY_VALUE:
+			UNREACHABLE
+		case CONST_INIT_ARRAY:
+		{
+			FOREACH(ConstInitializer *, init, initializer->init_array.elements)
+			{
+				ASSERT0(init->kind == CONST_INIT_ARRAY_VALUE);
+				arr[init->init_array_value.index] = (char) int_to_i64(init->init_array_value.element->init_value->const_expr.ixx);
+			}
+			break;
+		}
+		case CONST_INIT_ARRAY_FULL:
+		{
+			FOREACH_IDX(i, ConstInitializer *, init, initializer->init_array_full)
+			{
+				ASSERT0(init->kind == CONST_INIT_VALUE);
+				arr[i] = (char)int_to_i64(init->init_value->const_expr.ixx);
+			}
+			break;
+		}
+	}
+	*expr_const = (ExprConst) { .const_kind = contract_type, .bytes.ptr = arr, .bytes.len = len };
+}
+
+INLINE bool const_is_bytes(ConstKind kind)
+{
+	return kind == CONST_BYTES || kind == CONST_STRING;
+}
 
 bool expr_const_compare(const ExprConst *left, const ExprConst *right, BinaryOp op)
 {
 	bool is_eq;
-	assert(left->const_kind == right->const_kind);
+	ConstKind left_kind = left->const_kind;
+	ConstKind right_kind = right->const_kind;
+	ExprConst replace;
+	if (left_kind != right_kind)
+	{
+		if (const_is_bytes(left_kind))
+		{
+			if (!const_is_bytes(right_kind))
+			{
+				replace = *right;
+				expr_contract_array(&replace, left_kind);
+				right = &replace;
+			}
+		}
+		else if (const_is_bytes(right_kind))
+		{
+			if (!const_is_bytes(left_kind))
+			{
+				replace = *left;
+				expr_contract_array(&replace, right_kind);
+				left = &replace;
+			}
+		}
+	}
 	switch (left->const_kind)
 	{
 		case CONST_BOOL:
 			return compare_bool(left->b, right->b, op);
 		case CONST_INTEGER:
-			assert(right->const_kind != CONST_ENUM);
+			ASSERT0(right->const_kind != CONST_ENUM);
 			return int_comp(left->ixx, right->ixx, op);
+		case CONST_REF:
+			ASSERT0(right->const_kind == CONST_POINTER || right->const_kind == CONST_REF);
+			if (right->const_kind == CONST_POINTER) return false;
+			return decl_flatten(right->global_ref) == decl_flatten(left->global_ref);
 		case CONST_FLOAT:
 			return compare_fps(left->fxx.f, right->fxx.f, op);
 		case CONST_POINTER:
@@ -90,7 +168,7 @@ bool expr_const_compare(const ExprConst *left, const ExprConst *right, BinaryOp 
 		{
 			Decl *left_decl = left->enum_err_val;
 			// The error case
-			assert(right->const_kind == left->const_kind);
+			ASSERT0(right->const_kind == left->const_kind);
 			Decl *right_decl = right->enum_err_val;
 			// Non-matching cannot be compared.
 			if (right_decl->type != left_decl->type) return false;
@@ -126,6 +204,8 @@ bool expr_const_compare(const ExprConst *left, const ExprConst *right, BinaryOp 
 			}
 			is_eq = !memcmp(left->bytes.ptr, right->bytes.ptr, left->bytes.len);
 			goto RETURN;
+		case CONST_SLICE:
+			return false;
 		case CONST_INITIALIZER:
 			return false;
 		case CONST_UNTYPED_LIST:
@@ -175,7 +255,7 @@ bool expr_const_float_fits_type(const ExprConst *expr_const, TypeKind kind)
 		default:
 			UNREACHABLE
 	}
-	assert(expr_const->const_kind == CONST_FLOAT);
+	ASSERT0(expr_const->const_kind == CONST_FLOAT);
 	return expr_const->fxx.f >= -lo_limit && expr_const->fxx.f <= hi_limit;
 }
 
@@ -199,9 +279,11 @@ bool expr_const_will_overflow(const ExprConst *expr, TypeKind kind)
 		case CONST_STRING:
 		case CONST_POINTER:
 		case CONST_TYPEID:
+		case CONST_SLICE:
 		case CONST_INITIALIZER:
 		case CONST_UNTYPED_LIST:
 		case CONST_MEMBER:
+		case CONST_REF:
 			UNREACHABLE;
 	}
 	UNREACHABLE;
@@ -215,17 +297,19 @@ const char *expr_const_to_error_string(const ExprConst *expr)
 	{
 		case CONST_POINTER:
 			if (!expr->ptr) return "null";
-			return str_printf("%p", (void*)expr->ptr);
+			return str_printf("%p", (void*)(intptr_t)expr->ptr);
 		case CONST_BOOL:
 			return expr->b ? "true" : "false";
 		case CONST_INTEGER:
-			return int_to_str(expr->ixx, 10);
+			return int_to_str(expr->ixx, 10, false);
 		case CONST_FLOAT:
 			return str_printf("%g", expr->fxx.f);
 		case CONST_STRING:
 			return str_printf("\"%*.s\"", expr->bytes.len, expr->bytes.ptr);
 		case CONST_BYTES:
 			return "<binary data>";
+		case CONST_REF:
+			return expr->global_ref->name;
 		case CONST_ENUM:
 		case CONST_ERR:
 			return expr->enum_err_val->name;
@@ -233,6 +317,7 @@ const char *expr_const_to_error_string(const ExprConst *expr)
 			return type_to_error_string(expr->typeid);
 		case CONST_MEMBER:
 			return "member";
+		case CONST_SLICE:
 		case CONST_INITIALIZER:
 			return "constant list";
 		case CONST_UNTYPED_LIST:

@@ -112,7 +112,7 @@ INLINE void llvm_emit_compare_exchange(GenContext *c, BEValue *result_value, Exp
 												 ordering_to_llvm(success_ordering), ordering_to_llvm(failure_ordering), false);
 	if (alignment && alignment >= type_abi_alignment(type))
 	{
-		assert(is_power_of_two(alignment));
+		ASSERT0(is_power_of_two(alignment));
 		LLVMSetAlignment(result, alignment);
 	}
 	if (is_volatile) LLVMSetVolatile(result, true);
@@ -227,7 +227,7 @@ INLINE void llvm_emit_atomic_fetch(GenContext *c, BuiltinFunction func, BEValue 
 	uint64_t alignment = expr->call_expr.arguments[4]->const_expr.ixx.i.low;
 	if (alignment)
 	{
-		assert(is_power_of_two(alignment));
+		ASSERT0(is_power_of_two(alignment));
 		LLVMSetAlignment(res, alignment);
 	}
 	llvm_value_set(result_value, res, result_value->type);
@@ -270,7 +270,7 @@ static inline void llvm_syscall_write_regs_to_scratch(const char** registers, un
 static inline void llvm_emit_syscall(GenContext *c, BEValue *be_value, Expr *expr)
 {
 	unsigned arguments = vec_size(expr->call_expr.arguments);
-	assert(arguments < 10 && "Only has room for 10");
+	ASSERT0(arguments < 10 && "Only has room for 10");
 	LLVMValueRef arg_results[10];
 	LLVMTypeRef arg_types[10];
 	Expr **args = expr->call_expr.arguments;
@@ -285,13 +285,13 @@ static inline void llvm_emit_syscall(GenContext *c, BEValue *be_value, Expr *exp
 	LLVMTypeRef func_type = LLVMFunctionType(type, arg_types, arguments, false);
 	scratch_buffer_clear();
 	LLVMValueRef inline_asm;
-	switch (platform_target.arch)
+	switch (compiler.platform.arch)
 	{
 		case ARCH_TYPE_AARCH64:
 		case ARCH_TYPE_AARCH64_BE:
 			scratch_buffer_append("={x0}");
-			assert(arguments < 8);
-			if (os_is_apple(platform_target.os))
+			ASSERT0(arguments < 8);
+			if (os_is_apple(compiler.platform.os))
 			{
 				static char const *regs[] = { "x16", "x0", "x1", "x2", "x3", "x4", "x5" };
 				llvm_syscall_write_regs_to_scratch(regs, arguments);
@@ -306,7 +306,7 @@ static inline void llvm_emit_syscall(GenContext *c, BEValue *be_value, Expr *exp
 		case ARCH_TYPE_X86:
 		{
 			scratch_buffer_append("={eax}");
-			assert(arguments < 8);
+			ASSERT0(arguments < 8);
 			static char const *regs[] = { "eax", "ebx", "ecx", "edx", "esi", "edi" };
 			llvm_syscall_write_regs_to_scratch(regs, arguments < 6 ? arguments : 6);
 			if (arguments == 7)
@@ -321,7 +321,7 @@ static inline void llvm_emit_syscall(GenContext *c, BEValue *be_value, Expr *exp
 		}
 		case ARCH_TYPE_X86_64:
 			scratch_buffer_append("={rax}");
-			assert(arguments < 8);
+			ASSERT0(arguments < 8);
 			{
 				static char const *regs[] = { "rax", "rdi", "rsi", "rdx", "r10", "r8", "r9" };
 				llvm_syscall_write_regs_to_scratch(regs, arguments);
@@ -379,8 +379,8 @@ INLINE void llvm_emit_memcpy_builtin(GenContext *c, unsigned intrinsic, BEValue 
 	call_type[0] = call_type[1] = c->ptr_type;
 	call_type[2] = c->size_type;
 	LLVMValueRef result = llvm_emit_call_intrinsic(c, intrinsic, call_type, 3, arg_slots, 4);
-	assert(args[4]->const_expr.const_kind == CONST_INTEGER);
-	assert(args[5]->const_expr.const_kind == CONST_INTEGER);
+	ASSERT0(args[4]->const_expr.const_kind == CONST_INTEGER);
+	ASSERT0(args[5]->const_expr.const_kind == CONST_INTEGER);
 	uint64_t dst_align = int_to_u64(args[4]->const_expr.ixx);
 	uint64_t src_align = int_to_u64(args[5]->const_expr.ixx);
 	if (dst_align > 0) llvm_attribute_add_call(c, result, attribute_id.align, 1, dst_align);
@@ -397,8 +397,8 @@ INLINE void llvm_emit_memmove_builtin(GenContext *c, BEValue *be_value, Expr *ex
 	call_type[0] = call_type[1] = c->ptr_type;
 	call_type[2] = c->size_type;
 	LLVMValueRef result = llvm_emit_call_intrinsic(c, intrinsic_id.memmove, call_type, 3, arg_slots, 4);
-	assert(args[4]->const_expr.const_kind == CONST_INTEGER);
-	assert(args[5]->const_expr.const_kind == CONST_INTEGER);
+	ASSERT0(args[4]->const_expr.const_kind == CONST_INTEGER);
+	ASSERT0(args[5]->const_expr.const_kind == CONST_INTEGER);
 	uint64_t dst_align = int_to_u64(args[4]->const_expr.ixx);
 	uint64_t src_align = int_to_u64(args[5]->const_expr.ixx);
 	if (dst_align > 0) llvm_attribute_add_call(c, result, attribute_id.align, 1, dst_align);
@@ -413,7 +413,7 @@ INLINE void llvm_emit_memset_builtin(GenContext *c, unsigned intrinsic, BEValue 
 	llvm_emit_intrinsic_args(c, args, arg_slots, 4);
 	LLVMTypeRef call_type[2] = { c->ptr_type, c->size_type };
 	LLVMValueRef result = llvm_emit_call_intrinsic(c, intrinsic, call_type, 2, arg_slots, 4);
-	assert(args[4]->const_expr.const_kind == CONST_INTEGER);
+	ASSERT0(args[4]->const_expr.const_kind == CONST_INTEGER);
 	uint64_t dst_align = int_to_u64(args[4]->const_expr.ixx);
 	if (dst_align > 0) llvm_attribute_add_call(c, result, attribute_id.align, 1, dst_align);
 	llvm_value_set(be_value, result, type_void);
@@ -475,7 +475,7 @@ void llvm_emit_3_variant_builtin(GenContext *c, BEValue *be_value, Expr *expr, u
 {
 	Expr **args = expr->call_expr.arguments;
 	unsigned count = vec_size(args);
-	assert(count <= 3);
+	ASSERT0(count <= 3);
 	LLVMValueRef arg_slots[3];
 	unsigned intrinsic = llvm_intrinsic_by_type(args[0]->type, sid, uid, fid);
 	llvm_emit_intrinsic_args(c, args, arg_slots, count);
@@ -508,8 +508,8 @@ void llvm_emit_simple_builtin(GenContext *c, BEValue *be_value, Expr *expr, unsi
 {
 	Expr **args = expr->call_expr.arguments;
 	unsigned count = vec_size(args);
-	assert(count <= 4);
-	assert(count > 0);
+	ASSERT0(count <= 4);
+	ASSERT0(count > 0);
 	LLVMValueRef arg_slots[4];
 	llvm_emit_intrinsic_args(c, args, arg_slots, count);
 	LLVMTypeRef call_type = LLVMTypeOf(arg_slots[0]);
@@ -520,7 +520,7 @@ void llvm_emit_simple_builtin(GenContext *c, BEValue *be_value, Expr *expr, unsi
 static void llvm_emit_masked_load(GenContext *c, BEValue *be_value, Expr *expr)
 {
 	Expr **args = expr->call_expr.arguments;
-	assert(vec_size(args) == 4);
+	ASSERT0(vec_size(args) == 4);
 	LLVMValueRef arg_slots[4];
 	llvm_emit_intrinsic_args(c, args, arg_slots, 3);
 	// Rearrange to match our builtin with the intrinsic which is ptr, align, mask, passthru
@@ -538,7 +538,7 @@ static void llvm_emit_masked_load(GenContext *c, BEValue *be_value, Expr *expr)
 static void llvm_emit_gather(GenContext *c, BEValue *be_value, Expr *expr)
 {
 	Expr **args = expr->call_expr.arguments;
-	assert(vec_size(args) == 4);
+	ASSERT0(vec_size(args) == 4);
 	LLVMValueRef arg_slots[4];
 	llvm_emit_intrinsic_args(c, args, arg_slots, 3);
 	// Rearrange to match our builtin with the intrinsic which is ptr, align, mask, passthru
@@ -556,7 +556,7 @@ static void llvm_emit_gather(GenContext *c, BEValue *be_value, Expr *expr)
 static void llvm_emit_masked_store(GenContext *c, BEValue *be_value, Expr *expr)
 {
 	Expr **args = expr->call_expr.arguments;
-	assert(vec_size(args) == 4);
+	ASSERT0(vec_size(args) == 4);
 	LLVMValueRef arg_slots[4];
 	llvm_emit_intrinsic_args(c, args, arg_slots, 3);
 	// Rearrange to match our builtin with the intrinsic which is value, ptr, align, mask
@@ -576,7 +576,7 @@ static void llvm_emit_masked_store(GenContext *c, BEValue *be_value, Expr *expr)
 static void llvm_emit_scatter(GenContext *c, BEValue *be_value, Expr *expr)
 {
 	Expr **args = expr->call_expr.arguments;
-	assert(vec_size(args) == 4);
+	ASSERT0(vec_size(args) == 4);
 	LLVMValueRef arg_slots[4];
 	llvm_emit_intrinsic_args(c, args, arg_slots, 3);
 	// Rearrange to match our builtin with the intrinsic which is value, ptr, align, mask
@@ -598,8 +598,8 @@ void llvm_emit_builtin_args_types3(GenContext *c, BEValue *be_value, Expr *expr,
 {
 	Expr **args = expr->call_expr.arguments;
 	unsigned count = vec_size(args);
-	assert(count <= 3);
-	assert(count > 0);
+	ASSERT0(count <= 3);
+	ASSERT0(count > 0);
 	LLVMValueRef arg_slots[3];
 	llvm_emit_intrinsic_args(c, args, arg_slots, count);
 	LLVMTypeRef call_type[3];
@@ -638,7 +638,7 @@ static void llvm_emit_wrap_builtin(GenContext *c, BEValue *result_value, Expr *e
 	llvm_emit_intrinsic_args(c, args, arg_slots, func == BUILTIN_EXACT_NEG ? 1 : 2);
 	Type *base_type = type_lowering(args[0]->type);
 	if (base_type->type_kind == TYPE_VECTOR) base_type = base_type->array.base;
-	assert(type_is_integer(base_type));
+	ASSERT0(type_is_integer(base_type));
 	bool is_signed = type_is_signed(base_type);
 	LLVMValueRef res;
 	switch (func)
@@ -681,105 +681,6 @@ static void llvm_emit_wrap_builtin(GenContext *c, BEValue *result_value, Expr *e
 	llvm_value_set(result_value, res, expr->type);
 }
 
-static void llvm_emit_veccomp(GenContext *c, BEValue *value, Expr *expr, BuiltinFunction fn)
-{
-	Expr **args = expr->call_expr.arguments;
-	unsigned count = vec_size(args);
-	(void)count;
-	assert(count == 2);
-
-	LLVMValueRef mask;
-	llvm_emit_expr(c, value, args[0]);
-	llvm_value_rvalue(c, value);
-	LLVMValueRef lhs_value = value->value;
-	llvm_emit_expr(c, value, args[1]);
-	llvm_value_rvalue(c, value);
-	LLVMValueRef rhs_value = value->value;
-	LLVMValueRef res;
-	if (type_flat_is_floatlike(args[0]->type))
-	{
-		switch (fn)
-		{
-			case BUILTIN_VECCOMPEQ:
-				// Unordered?
-				res = LLVMBuildFCmp(c->builder, LLVMRealOEQ, lhs_value, rhs_value, "eq");
-				break;
-			case BUILTIN_VECCOMPNE:
-				// Unordered?
-				res = LLVMBuildFCmp(c->builder, LLVMRealONE, lhs_value, rhs_value, "neq");
-				break;
-			case BUILTIN_VECCOMPGE:
-				res = LLVMBuildFCmp(c->builder, LLVMRealOGE, lhs_value, rhs_value, "ge");
-				break;
-			case BUILTIN_VECCOMPGT:
-				res = LLVMBuildFCmp(c->builder, LLVMRealOGT, lhs_value, rhs_value, "gt");
-				break;
-			case BUILTIN_VECCOMPLE:
-				res = LLVMBuildFCmp(c->builder, LLVMRealOLE, lhs_value, rhs_value, "le");
-				break;
-			case BUILTIN_VECCOMPLT:
-				res = LLVMBuildFCmp(c->builder, LLVMRealOLT, lhs_value, rhs_value, "lt");
-				break;
-			default:
-				UNREACHABLE
-		}
-	}
-	else
-	{
-		bool is_signed = type_is_signed(args[0]->type->array.base);
-		switch (fn)
-		{
-			case BUILTIN_VECCOMPEQ:
-				// Unordered?
-				res = LLVMBuildICmp(c->builder, LLVMIntEQ, lhs_value, rhs_value, "eq");
-				break;
-			case BUILTIN_VECCOMPNE:
-				// Unordered?
-				res = LLVMBuildICmp(c->builder, LLVMIntNE, lhs_value, rhs_value, "neq");
-				break;
-			case BUILTIN_VECCOMPGE:
-				res = LLVMBuildICmp(c->builder, is_signed ? LLVMIntSGE : LLVMIntUGE, lhs_value, rhs_value, "ge");
-				break;
-			case BUILTIN_VECCOMPGT:
-				res = LLVMBuildICmp(c->builder, is_signed ? LLVMIntSGT : LLVMIntUGT, lhs_value, rhs_value, "gt");
-				break;
-			case BUILTIN_VECCOMPLE:
-				res = LLVMBuildICmp(c->builder, is_signed ? LLVMIntSLE : LLVMIntULE, lhs_value, rhs_value, "le");
-				break;
-			case BUILTIN_VECCOMPLT:
-				res = LLVMBuildICmp(c->builder, is_signed ? LLVMIntSLT : LLVMIntULT, lhs_value, rhs_value, "lt");
-				break;
-			default:
-				UNREACHABLE
-		}
-	}
-	llvm_value_set(value, res, expr->type);
-	return;
-
-}
-
-static inline void llvm_emit_any_make(GenContext *c, BEValue *value, Expr *expr)
-{
-	Expr **args = expr->call_expr.arguments;
-	Expr *typeid = args[1];
-	if (expr_is_const(typeid) && typeid->const_expr.typeid == type_void)
-	{
-		llvm_value_set(value, llvm_get_zero(c, type_any), type_any);
-		return;
-	}
-	BEValue ptr;
-	llvm_emit_expr(c, &ptr, args[0]);
-	llvm_value_rvalue(c, &ptr);
-	BEValue typeid_value;
-	llvm_emit_expr(c, &typeid_value, typeid);
-	llvm_value_rvalue(c, &typeid_value);
-	LLVMValueRef var = llvm_get_undef(c, type_any);
-	var = llvm_emit_insert_value(c, var, ptr.value, 0);
-	var = llvm_emit_insert_value(c, var, typeid_value.value, 1);
-	assert(!LLVMIsConstant(ptr.value) || !LLVMIsConstant(typeid_value.value) || LLVMIsConstant(var));
-	llvm_value_set(value, var, type_any);
-}
-
 
 void llvm_emit_builtin_call(GenContext *c, BEValue *result_value, Expr *expr)
 {
@@ -789,8 +690,8 @@ void llvm_emit_builtin_call(GenContext *c, BEValue *result_value, Expr *expr)
 	switch (func)
 	{
 		case BUILTIN_ANY_MAKE:
-			llvm_emit_any_make(c, result_value, expr);
-			return;
+			// Folded in the frontend.
+			UNREACHABLE
 		case BUILTIN_UNREACHABLE:
 			llvm_emit_unreachable_stmt(c, result_value, expr);
 			return;
@@ -829,8 +730,7 @@ void llvm_emit_builtin_call(GenContext *c, BEValue *result_value, Expr *expr)
 		case BUILTIN_VECCOMPEQ:
 		case BUILTIN_VECCOMPGT:
 		case BUILTIN_VECCOMPGE:
-			llvm_emit_veccomp(c, result_value, expr, func);
-			return;
+			UNREACHABLE
 		case BUILTIN_REVERSE:
 			llvm_emit_reverse(c, result_value, expr);
 			return;
@@ -961,7 +861,7 @@ void llvm_emit_builtin_call(GenContext *c, BEValue *result_value, Expr *expr)
 			llvm_emit_masked_load(c, result_value, expr);
 			return;
 		case BUILTIN_EXPECT_WITH_PROBABILITY:
-			if (active_target.optlevel == OPTIMIZATION_NONE)
+			if (compiler.build.optlevel == OPTIMIZATION_NONE)
 			{
 				Expr **args = expr->call_expr.arguments;
 				llvm_emit_expr(c, result_value, args[0]);
@@ -1068,7 +968,7 @@ void llvm_emit_builtin_call(GenContext *c, BEValue *result_value, Expr *expr)
 			return;
 		case BUILTIN_WASM_MEMORY_GROW:
 			// -1 on non-wasm
-			if (!arch_is_wasm(platform_target.arch))
+			if (!arch_is_wasm(compiler.platform.arch))
 			{
 				llvm_value_set(result_value, llvm_const_int(c, expr->type, -1), expr->type);
 				return;
@@ -1076,7 +976,7 @@ void llvm_emit_builtin_call(GenContext *c, BEValue *result_value, Expr *expr)
 			llvm_emit_builtin_args_types3(c, result_value, expr, intrinsic_id.wasm_memory_grow, expr->type, NULL, NULL);
 			return;
 		case BUILTIN_WASM_MEMORY_SIZE:
-			if (!arch_is_wasm(platform_target.arch))
+			if (!arch_is_wasm(compiler.platform.arch))
 			{
 				// 0 (no mem) on non-wasm.
 				llvm_value_set(result_value, llvm_const_int(c, expr->type, 0), expr->type);

@@ -1,12 +1,17 @@
+// Copyright (c) 2022-2024 Christoffer Lerno and contributors. All rights reserved.
+// Use of this source code is governed by a LGPLv3.0
+// a copy of which can be found in the LICENSE file.
+
 #include "sema_internal.h"
 #include "compiler/asm/x86.h"
 
-
+// Add a single clobber to a block.
 static inline void sema_add_clobber(AsmInlineBlock *block, unsigned index)
 {
 	clobbers_add(&block->clobbers, index);
 }
 
+// Add a full clobber mask to the clobbers.
 static inline void sema_add_clobbers(AsmInlineBlock *block, Clobbers *clobbers)
 {
 	for (unsigned i = 0; i < CLOBBER_FLAG_ELEMENTS; i++)
@@ -21,12 +26,17 @@ static inline Type *max_supported_imm_int(bool is_signed, AsmArgType arg)
 	if (is_signed)
 	{
 		unsigned bits = arg_bits_max(arg.imm_arg_ibits, 64);
-		if (!bits) return NULL;
-		return type_int_signed_by_bitsize(bits);
+		if (!bits)
+		{
+			bits = arg_bits_max(arg.imm_arg_ubits, 64);
+			if (!bits) return NULL;
+			return type_int_unsigned_by_bitsize(next_highest_power_of_2(bits));
+		}
+		return type_int_signed_by_bitsize(next_highest_power_of_2(bits));
 	}
 	unsigned bits = arg_bits_max(arg.imm_arg_ubits, 64);
 	if (!bits) return NULL;
-	return type_int_unsigned_by_bitsize(bits);
+	return type_int_unsigned_by_bitsize(next_highest_power_of_2(bits));
 }
 
 /*
@@ -51,9 +61,9 @@ static inline AsmArgGroup sema_ireg_for_type(Type *type)
  */
 static inline bool sema_reg_int_suported_type(AsmArgType arg, Type *type)
 {
-	assert(type_flatten(type) == type);
+	ASSERT0(type_flatten(type) == type);
 	unsigned bits = type_bit_size(type);
-	return arg_bits_max(arg.ireg_bits, bits) == bits;
+	return next_highest_power_of_2(arg_bits_max(arg.ireg_bits, bits)) == bits;
 }
 
 INLINE bool sema_reg_is_valid_in_slot(AsmRegister *reg, AsmArgType arg_type)
@@ -73,9 +83,56 @@ INLINE bool sema_reg_is_valid_in_slot(AsmRegister *reg, AsmArgType arg_type)
 
 static inline bool sema_reg_float_suported_type(AsmArgType arg, Type *type)
 {
-	assert(type_flatten(type) == type);
+	ASSERT0(type_flatten(type) == type);
 	if (!arg.float_bits) return false;
-	return type_bit_size(type) == arg_bits_max(arg.float_bits, 0);
+	return type_bit_size(type) == next_highest_power_of_2(arg_bits_max(arg.float_bits, 0));
+}
+
+static inline bool sema_check_npot_imm_fits(Int imm, AsmArgType arg_type)
+{
+	// Check if actually an immediate. If not, just move along.
+	if (arg_type.imm_arg_ibits == 0 && arg_type.imm_arg_ubits == 0) return true;
+	// See if we can do a direct comparison
+	bool direct_compare = int_fits(imm, TYPE_I64);
+	int64_t val = direct_compare ? int_to_i64(imm) : 0;
+
+	// The signed case
+	if (arg_type.imm_arg_ibits > 0)
+	{
+		if (arg_type.imm_arg_ibits & ARG_BITS_20)
+		{
+			if (!direct_compare) return false;
+			return val >= INT20_MIN && val <= INT20_MAX;
+		}
+		if (arg_type.imm_arg_ibits & ARG_BITS_12)
+		{
+			if (!direct_compare) return false;
+			return val >= INT12_MIN && val <= INT12_MAX;
+		}
+		if (arg_type.imm_arg_ibits & ARG_BITS_5)
+		{
+			if (!direct_compare) return false;
+			return val >= INT5_MIN && val <= INT5_MAX;
+		}
+		return true;
+	}
+	ASSERT0(arg_type.imm_arg_ubits > 0);
+	if (arg_type.imm_arg_ubits & ARG_BITS_20)
+	{
+		if (!direct_compare) return false;
+		return val >= 0 && val <= UINT20_MAX;
+	}
+	if (arg_type.imm_arg_ubits & ARG_BITS_12)
+	{
+		if (!direct_compare) return false;
+		return val >= 0 && val <= UINT12_MAX;
+	}
+	if (arg_type.imm_arg_ubits & ARG_BITS_5)
+	{
+		if (!direct_compare) return false;
+		return val >= 0 && val <= UINT5_MAX;
+	}
+	return true;
 }
 
 static inline bool sema_check_asm_arg_const_int(SemaContext *context, AsmInlineBlock *block, AsmInstruction *instr, AsmArgType arg_type, Expr *expr, Expr *int_expr)
@@ -88,14 +145,18 @@ static inline bool sema_check_asm_arg_const_int(SemaContext *context, AsmInlineB
 		return false;
 	}
 	Int i = int_expr->const_expr.ixx;
-	if (!type || !int_fits(i, type->type_kind))
+	unsigned max_bits = arg_bits_max(arg_type.imm_arg_ibits > arg_type.imm_arg_ubits ? arg_type.imm_arg_ibits : arg_type.imm_arg_ubits, 0);
+	if (!type || !int_fits(i, type->type_kind) || !sema_check_npot_imm_fits(i, arg_type))
 	{
-		SEMA_ERROR(expr, "'%s' expected %s.", instr->name, type_quoted_error_string(type));
+		SEMA_ERROR(expr, "'%s' expected %s limited to %d bits.", instr->name, type_quoted_error_string(type), max_bits);
 		return false;
 	}
 	// Because we assume max 64 bit imm, we can do this simple cast for signed values.
+	expr->expr_asm_arg.is_neg = false;
+	expr->expr_asm_arg.bits = max_bits;
 	if (is_signed)
 	{
+		expr->expr_asm_arg.is_neg = i128_is_neg(int_expr->const_expr.ixx.i);
 		switch (type->type_kind)
 		{
 			case TYPE_I8:
@@ -123,12 +184,11 @@ static inline bool sema_check_asm_arg_addr(SemaContext *context, AsmInlineBlock 
 {
 	if (!arg_type.is_address)
 	{
-		SEMA_ERROR(expr, "An address cannot appear in this slot.");
-		return false;
+		RETURN_SEMA_ERROR(expr, "An address cannot appear in this slot.");
 	}
 	ExprAsmArg *asm_arg = &expr->expr_asm_arg;
 	Expr *base = exprptr(asm_arg->base);
-	assert(base->expr_kind == EXPR_ASM);
+	ASSERT0(base->expr_kind == EXPR_ASM);
 	ExprAsmArg *base_arg = &base->expr_asm_arg;
 	AsmArgType any_ireg = { .ireg_bits = (AsmArgBits)0xFF };
 	unsigned bit_size = 0;
@@ -146,8 +206,7 @@ static inline bool sema_check_asm_arg_addr(SemaContext *context, AsmInlineBlock 
 			TODO
 			break;
 		default:
-			SEMA_ERROR(expr, "Expected a register here.");
-			return false;
+			RETURN_SEMA_ERROR(expr, "Expected a register here.");
 	}
 	Expr *index = exprptrzero(asm_arg->idx);
 
@@ -171,10 +230,20 @@ static inline bool sema_check_asm_arg_addr(SemaContext *context, AsmInlineBlock 
 		}
 		if (bit_size != index_size)
 		{
-			SEMA_ERROR(index, "Expected the same register size as for the base value.");
-			return false;
+			RETURN_SEMA_ERROR(index, "Expected the same register size as for the base value.");
 		}
 	}
+	if ((compiler.platform.arch == ARCH_TYPE_RISCV32 || 
+		compiler.platform.arch == ARCH_TYPE_RISCV64) &&
+		asm_arg->offset)
+	{
+		if ((asm_arg->neg_offset && asm_arg->offset > abs(INT12_MIN)) ||
+			(!asm_arg->neg_offset && asm_arg->offset > INT12_MAX))
+		{
+			RETURN_SEMA_ERROR(expr, "RISC-V offset limited to 12-bits signed.");
+		}
+	}
+
 	REMINDER("check if addressing mode is supported");
 	return true;
 }
@@ -182,16 +251,11 @@ static inline bool sema_check_asm_arg_addr(SemaContext *context, AsmInlineBlock 
 static inline bool sema_check_asm_arg_reg(SemaContext *context, AsmInlineBlock *block, AsmInstruction *instr, AsmArgType arg_type, Expr *expr)
 {
 	const char *name = expr->expr_asm_arg.reg.name;
-	AsmRegister *reg = expr->expr_asm_arg.reg.ref = asm_reg_by_name(name);
-	if (!reg)
-	{
-		SEMA_ERROR(expr, "Expected a valid register name.");
-		return false;
-	}
+	AsmRegister *reg = expr->expr_asm_arg.reg.ref = asm_reg_by_name(&compiler.platform, name);
+	if (!reg) RETURN_SEMA_ERROR(expr, "Expected a valid register name.");
 	if (!sema_reg_is_valid_in_slot(reg, arg_type))
 	{
-		SEMA_ERROR(expr, "'%s' is not valid in this slot.", reg->name);
-		return false;
+		RETURN_SEMA_ERROR(expr, "'%s' is not valid in this slot.", reg->name);
 	}
 	if (arg_type.is_write)
 	{
@@ -286,7 +350,7 @@ static inline bool sema_check_asm_var(SemaContext *context, AsmInlineBlock *bloc
 	Decl *decl = sema_resolve_symbol(context, name, NULL, expr->span);
 	if (!decl) return false;
 
-	assert(arg->kind == ASM_ARG_REGVAR);
+	ASSERT0(arg->kind == ASM_ARG_REGVAR);
 	arg->ident.ident_decl = decl;
 	if (decl->decl_kind != DECL_VAR)
 	{
@@ -341,7 +405,7 @@ static inline bool sema_check_asm_var(SemaContext *context, AsmInlineBlock *bloc
 		if (!sema_reg_int_suported_type(arg_type, type))
 		{
 			unsigned bits = arg_bits_max(arg_type.ireg_bits, 0);
-			assert(bits);
+			ASSERT0(bits);
 			SEMA_ERROR(expr, "%s is not supported in this position, convert it to a valid type, like %s.",
 					   type_quoted_error_string(decl->type), type_quoted_error_string(type_int_signed_by_bitsize(bits)));
 			return false;
@@ -379,7 +443,7 @@ static inline bool sema_check_asm_memvar(SemaContext *context, AsmInlineBlock *b
 	const char *name = arg->ident.name;
 	Decl *decl = sema_resolve_symbol(context, name, NULL, expr->span);
 	if (!decl) return false;
-	assert(arg->kind == ASM_ARG_MEMVAR);
+	ASSERT0(arg->kind == ASM_ARG_MEMVAR);
 	arg->ident.ident_decl = decl;
 	if (decl->decl_kind != DECL_VAR)
 	{
@@ -475,36 +539,33 @@ static inline bool sema_check_asm_arg(SemaContext *context, AsmInlineBlock *bloc
 	}
 	UNREACHABLE
 }
+
 bool sema_analyse_asm(SemaContext *context, AsmInlineBlock *block, Ast *asm_stmt)
 {
-	if (platform_target.arch != ARCH_TYPE_X86_64 && platform_target.arch != ARCH_TYPE_AARCH64)
-	{
-		SEMA_ERROR(asm_stmt, "Unsupported architecture for asm.");
-		return false;
-	}
-	init_asm();
+	ASSERT0(compiler.platform.asm_initialized);
+
 	AsmInstruction *instr = asm_instr_by_name(asm_stmt->asm_stmt.instruction);
-	if (!instr)
-	{
-		SEMA_ERROR(asm_stmt, "Unknown instruction");
-		return false;
-	}
+	if (!instr) RETURN_SEMA_ERROR(asm_stmt, "Unknown instruction");
+
+	// Check arguments
 	Expr **args = asm_stmt->asm_stmt.args;
 	unsigned expected_params = instr->param_count;
 	unsigned arg_count = vec_size(args);
 	if (expected_params != arg_count)
 	{
-		SEMA_ERROR(asm_stmt, "Too %s arguments to instruction '%s', expected %d.",
-				   expected_params > arg_count ? "few" : "many",
-				   instr->name, expected_params);
-		return false;
+		RETURN_SEMA_ERROR(asm_stmt, "Too %s arguments to instruction '%s', expected %d.",
+						  expected_params > arg_count ? "few" : "many",
+						  instr->name, expected_params);
 	}
+
+	// Sema check each argument.
 	for (unsigned i = arg_count; i > 0; i--)
 	{
 		if (!sema_check_asm_arg(context, block, instr, instr->param[i - 1], args[i - 1])) return false;
 	}
+
+	// Add clobbers
 	sema_add_clobbers(block, &instr->mask);
-	//const char *variant = asm_stmt->asm_stmt.variant;
 	return true;
 }
 

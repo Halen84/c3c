@@ -18,6 +18,7 @@
 
 extern const char *varargslots_name;
 extern const char *temp_name;
+
 typedef enum
 {
 	BE_VALUE,
@@ -51,9 +52,11 @@ typedef struct DebugScope_
 
 typedef struct
 {
-	unsigned runtime_version : 8;
-	bool enable_stacktrace : 1;
+	bool enable_stacktrace;
+	bool emit_expr_loc;
+	unsigned runtime_version;
 	LLVMDIBuilderRef builder;
+
 	DebugFile *debug_files;
 	DebugFile file;
 	LLVMMetadataRef compile_unit;
@@ -81,6 +84,8 @@ typedef struct OptionalCatch_
 typedef struct GenContext_
 {
 	bool shared_context;
+	bool in_init_ref;
+	bool weaken;
 	LLVMModuleRef module;
 	LLVMBuilderRef global_builder;
 	LLVMTargetMachineRef machine;
@@ -95,6 +100,7 @@ typedef struct GenContext_
 	LLVMTypeRef bool_type;
 	LLVMTypeRef byte_type;
 	LLVMTypeRef introspect_type;
+	LLVMTypeRef atexit_type;
 	LLVMTypeRef fault_type;
 	LLVMTypeRef size_type;
 	LLVMTypeRef typeid_type;
@@ -276,6 +282,9 @@ typedef struct
 	unsigned optnone;         // No optimization
 	unsigned readonly;        // No reads on pointer
 	unsigned reassoc;         // allow reassociateion
+	unsigned sanitize_address; // enable address sanitizer (address)
+	unsigned sanitize_memory;  // enable address sanitizer (memory)
+	unsigned sanitize_thread;  // enable address sanitizer (thread)
 	unsigned sext;            // sign extend
 	unsigned sret;            // struct return pointer
 	unsigned ssp;             // safe stack protection
@@ -303,7 +312,7 @@ LLVMBuilderRef llvm_create_builder(GenContext *c);
 
 static inline LLVMValueRef decl_optional_ref(Decl *decl)
 {
-	assert(decl->decl_kind == DECL_VAR);
+	ASSERT0(decl->decl_kind == DECL_VAR);
 	if (decl->var.kind == VARDECL_UNWRAPPED) return decl_optional_ref(decl->var.alias);
 	if (decl->type->type_kind != TYPE_OPTIONAL) return NULL;
 	return decl->var.optional_ref;
@@ -357,10 +366,13 @@ void llvm_attribute_add_type(GenContext *c, LLVMValueRef value_to_add_attribute_
 void llvm_attribute_add_int(GenContext *c, LLVMValueRef value_to_add_attribute_to, unsigned attribute, uint64_t val, int index);
 
 // -- Linking --
+void llvm_set_selector_linkage(GenContext *c, LLVMValueRef selector);
 void llvm_set_linkonce(GenContext *c, LLVMValueRef global);
 void llvm_set_comdat(GenContext *c, LLVMValueRef global);
+void llvm_set_private_declaration(LLVMValueRef alloc);
+void llvm_set_decl_linkage(GenContext *c, Decl *decl);
 void llvm_set_weak(GenContext *c, LLVMValueRef global);
-void llvm_set_private_linkage(LLVMValueRef alloc);
+
 void llvm_set_internal_linkage(LLVMValueRef alloc);
 void llvm_set_global_tls(Decl *decl);
 
@@ -451,6 +463,7 @@ LLVMValueRef llvm_store_to_ptr_raw_aligned(GenContext *context, LLVMValueRef poi
 void llvm_store_to_ptr_zero(GenContext *context, LLVMValueRef pointer, Type *type);
 TypeSize llvm_store_size(GenContext *c, LLVMTypeRef type);
 TypeSize llvm_alloc_size(GenContext *c, LLVMTypeRef type);
+bool llvm_temp_as_address(GenContext *c, Type *type);
 
 /// -- Aggregates --
 INLINE LLVMValueRef llvm_emit_insert_value(GenContext *c, LLVMValueRef agg, LLVMValueRef new_value, ArraySize index);
@@ -502,6 +515,7 @@ void llvm_emit_parameter(GenContext *c, LLVMValueRef *args, unsigned *arg_count_
 LLVMValueRef llvm_get_selector(GenContext *c, const char *name);
 
 // -- C3 Lowering --
+void llvm_emit_expr_global_value(GenContext *c, BEValue *value, Expr *expr);
 void llvm_emit_expr(GenContext *c, BEValue *value, Expr *expr);
 LLVMValueRef llvm_emit_expr_to_rvalue(GenContext *c, Expr *expr);
 LLVMValueRef llvm_emit_exprid_to_rvalue(GenContext *c, ExprId expr_id);
@@ -518,19 +532,18 @@ LLVMValueRef llvm_emit_expect_raw(GenContext *c, LLVMValueRef expect_true);
 LLVMValueRef llvm_emit_expect_false(GenContext *c, BEValue *expect_false);
 void llvm_emit_any_from_value(GenContext *c, BEValue *value, Type *type);
 void llvm_emit_slice_len(GenContext *c, BEValue *slice, BEValue *len);
-void llvm_emit_slice_pointer(GenContext *context, BEValue *slice, BEValue *pointer);
+void llvm_emit_slice_pointer(GenContext *c, BEValue *slice, BEValue *pointer);
 void llvm_emit_compound_stmt(GenContext *c, Ast *ast);
 LLVMValueRef llvm_emit_const_bitstruct(GenContext *c, ConstInitializer *initializer);
 void llvm_emit_function_body(GenContext *context, Decl *decl);
 void llvm_emit_dynamic_functions(GenContext *context, Decl **funcs);
-BEValue llvm_emit_assign_expr(GenContext *c, BEValue *ref, Expr *expr, LLVMValueRef optional);
+BEValue llvm_emit_assign_expr(GenContext *c, BEValue *ref, Expr *expr, LLVMValueRef optional, bool is_init);
 INLINE void llvm_emit_exprid(GenContext *c, BEValue *value, ExprId expr);
 INLINE void llvm_emit_statement_chain(GenContext *c, AstId current);
 void llvm_emit_initialize_reference_temporary_const(GenContext *c, BEValue *ref, ConstInitializer *initializer);
-void llvm_emit_len_for_expr(GenContext *c, BEValue *be_value, BEValue *expr_to_len);
+
 LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl);
 LLVMValueRef llvm_emit_call_intrinsic(GenContext *c, unsigned intrinsic, LLVMTypeRef *types, unsigned type_count, LLVMValueRef *values, unsigned arg_count);
-void llvm_emit_cast(GenContext *c, CastKind cast_kind, Expr *expr, BEValue *value, Type *to_type, Type *from_type);
 void llvm_emit_local_var_alloca(GenContext *c, Decl *decl);
 void llvm_emit_local_decl(GenContext *c, Decl *decl, BEValue *value);
 void llvm_emit_builtin_call(GenContext *c, BEValue *result_value, Expr *expr);
@@ -561,12 +574,16 @@ LLVMMetadataRef llvm_create_debug_location(GenContext *c, SourceSpan location);
 void llvm_emit_debug_parameter(GenContext *c, Decl *parameter, unsigned index);
 void llvm_emit_debug_local_var(GenContext *c, Decl *var);
 
-#define FRAMEPOINTER (platform_target.arch == ARCH_TYPE_AARCH64 ? 1 : 2)
-#define UWTABLE (active_target.arch_os_target == MACOS_AARCH64 ? 1 : 2)
+#define UWTABLE (compiler.build.arch_os_target == MACOS_AARCH64 ? 1 : 2)
 #define EMIT_LOC(c, x) do { if (c->debug.builder) llvm_emit_debug_location(c, x->span); } while (0)
+#define EMIT_EXPR_LOC(c, x) do { if (c->debug.builder) llvm_emit_debug_location(c, x->span); } while (0)
 #define EMIT_SPAN(c, x) do { if (c->debug.builder) llvm_emit_debug_location(c, x); } while (0)
+#define PUSH_DEFER_ERROR(val__) LLVMValueRef def_err__ = c->defer_error_var; c->defer_error_var = val__
+#define POP_DEFER_ERROR() c->defer_error_var = def_err__
 
 LLVMAtomicOrdering llvm_atomic_ordering(Atomicity atomicity);
+
+bool module_should_weaken(Module *module);
 
 // Implementations
 

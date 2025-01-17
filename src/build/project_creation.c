@@ -20,9 +20,13 @@ const char* JSON_EXE =
 		"  \"version\": \"0.1.0\",\n"
 		"  // Sources compiled for all targets.\n"
 		"  \"sources\": [ \"src/**\" ],\n"
+		"  // Test sources compiled for all targets.\n"
+		"  \"test-sources\": [ \"test/**\" ],\n"
 		"  // C sources if the project also compiles C sources\n"
 		"  // relative to the project file.\n"
 		"  // \"c-sources\": [ \"csource/**\" ],\n"
+		"  // Include directories for C sources relative to the project file.\n"
+		"  // \"c-include-dirs\": [ \"csource/include\" ],\n"
 		"  // Output location, relative to project file.\n"
 		"  \"output\": \"build\",\n"
 		"  // Architecture and OS target.\n"
@@ -41,7 +45,7 @@ const char* JSON_EXE =
 		"  // CPU name, used for optimizations in the LLVM backend.\n"
 		"  \"cpu\": \"generic\",\n"
 		"  // Optimization: \"O0\", \"O1\", \"O2\", \"O3\", \"O4\", \"O5\", \"Os\", \"Oz\".\n"
-		"  \"opt\": \"O0\",\n"
+		"  \"opt\": \"O0\"\n"
 		"  // See resources/examples/project_all_settings.json and 'c3c --list-project-properties' to see more properties.\n"
 		"}";
 
@@ -61,9 +65,13 @@ const char* JSON_STATIC =
 		"  \"version\": \"0.1.0\",\n"
 		"  // Sources compiled for all targets.\n"
 		"  \"sources\": [ \"src/**\" ],\n"
+		"  // Test sources compiled for all targets.\n"
+		"  \"test-sources\": [ \"test/**\" ],\n"
 		"  // C sources if the project also compiles C sources\n"
 		"  // relative to the project file.\n"
 		"  // \"c-sources\": [ \"csource/**\" ],\n"
+		"  // Include directories for C sources relative to the project file.\n"
+		"  // \"c-include-dirs\": [ \"csource/include\" ],\n"
 		"  // Output location, relative to project file.\n"
 		"  \"output\": \"build\",\n"
 		"  // Architecture and OS target.\n"
@@ -80,7 +88,7 @@ const char* JSON_STATIC =
 		"  },\n"
 		"  // Global settings.\n"
 		"  // Optimization: \"O0\", \"O1\", \"O2\", \"O3\", \"O4\", \"O5\", \"Os\", \"Oz\".\n"
-		"  \"opt\": \"O0\",\n"
+		"  \"opt\": \"O0\"\n"
 		"  // See resources/examples/project_all_settings.json and 'c3c --list-project-properties' to see more properties.\n"
 		"}";
 
@@ -100,9 +108,13 @@ const char* JSON_DYNAMIC =
 		"  \"version\": \"0.1.0\",\n"
 		"  // Sources compiled for all targets.\n"
 		"  \"sources\": [ \"src/**\" ],\n"
+		"  // Test sources compiled for all targets.\n"
+		"  \"test-sources\": [ \"test/**\" ],\n"
 		"  // C sources if the project also compiles C sources\n"
 		"  // relative to the project file.\n"
 		"  // \"c-sources\": [ \"csource/**\" ],\n"
+		"  // Include directories for C sources relative to the project file.\n"
+		"  // \"c-include-dirs\": [ \"csource/include\" ],\n"
 		"  // Output location, relative to project file.\n"
 		"  \"output\": \"build\",\n"
 		"  // Architecture and OS target.\n"
@@ -119,13 +131,14 @@ const char* JSON_DYNAMIC =
 		"  },\n"
 		"  // Global settings.\n"
 		"  // Optimization: \"O0\", \"O1\", \"O2\", \"O3\", \"O4\", \"O5\", \"Os\", \"Oz\".\n"
-		"  \"opt\": \"O0\",\n"
+		"  \"opt\": \"O0\"\n"
 		"  // See resources/examples/project_all_settings.json and 'c3c --list-project-properties' to see more properties.\n"
 		"}";
 
 const char *MANIFEST_TEMPLATE =
 		"{\n"
 		"  \"provides\" : \"%s\",\n"
+		"  // \"sources\" : [ \"src/**\" ],\n"
 		"  \"targets\" : {\n"
 		"%s"
 		"  }\n"
@@ -134,11 +147,11 @@ const char *MANIFEST_TEMPLATE =
 const char *MANIFEST_TARGET =
 		"    \"%s\" : {\n"
 		"      // Extra flags to the linker for this target:\n"
-		"      \"linkflags\" : [],\n"
+		"      \"link-args\" : [],\n"
 		"      // C3 libraries this target depends on:\n"
 		"      \"dependencies\" : [],\n"
 		"      // The external libraries to link for this target:\n"
-		"      \"linked-libs\" : []\n"
+		"      \"linked-libraries\" : []\n"
 		"    },\n";
 
 const char *MAIN_TEMPLATE =
@@ -176,6 +189,7 @@ const char* DEFAULT_TARGETS[] = {
 const char *LIB_README = "Welcome to the %s library.\n";
 
 static bool check_name(const char *name);
+static char* get_cwd_project_name();
 static void exit_fail(const char *fmt, ...);
 static void delete_dir_and_exit(BuildOptions *build_options, const char *fmt, ...);
 static void mkdir_or_fail(BuildOptions *build_options, const char *name);
@@ -206,9 +220,11 @@ void create_library(BuildOptions *build_options)
 	}
 
 	chdir_or_fail(build_options, dir);
+
 	create_file_or_fail(build_options, "LICENSE", NULL);
 	create_file_or_fail(build_options, "README.md", LIB_README, build_options->project_name);
 	mkdir_or_fail(build_options, "scripts");
+
 	scratch_buffer_clear();
 	scratch_buffer_printf("%s.c3i", build_options->project_name);
 	const char *interface_file = scratch_buffer_copy();
@@ -244,6 +260,18 @@ void create_project(BuildOptions *build_options)
 		size_t len;
 		template = file_read_all(build_options->template, &len);
 	}
+
+	// Special case, a '.' is given
+	if (str_eq(build_options->project_name, "."))
+	{
+		build_options->project_name = get_cwd_project_name();
+		if (!check_name(build_options->project_name))
+		{
+			error_exit("The parent directory (which is '%s') is not a valid project name.", build_options->project_name);
+		}
+		goto CREATE;
+	}
+
 	if (!check_name(build_options->project_name))
 	{
 		error_exit("'%s' is not a valid project name.", build_options->project_name);
@@ -258,8 +286,9 @@ void create_project(BuildOptions *build_options)
 	{
 		error_exit("Could not create directory '%s'.", build_options->project_name);
 	}
-
 	chdir_or_fail(build_options, build_options->project_name);
+
+CREATE:
 	create_file_or_fail(build_options, "LICENSE", NULL);
 	create_file_or_fail(build_options, "README.md", NULL);
 	create_file_or_fail(build_options, "project.json", template, build_options->project_name);
@@ -286,27 +315,35 @@ static const char *module_name(BuildOptions *build_options)
 	scratch_buffer_clear();
 	size_t len = strlen(build_options->project_name);
 	bool has_char = false;
+	bool appended_underscore = false;
 	for (size_t i = 0; i < len; i++)
 	{
 		char c = build_options->project_name[i];
 		if (c >= '0' && c <= '9')
 		{
 			if (!has_char) scratch_buffer_append("m_");
-			has_char = true;
 			scratch_buffer_append_char(c);
+			has_char = true;
+			appended_underscore = false;
 			continue;
 		}
 		if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))
 		{
 			scratch_buffer_append_char(c | 0x20);
 			has_char = true;
+			appended_underscore = false;
 			continue;
 		}
-		scratch_buffer_append_char('_');
+		if (!appended_underscore)
+		{
+			scratch_buffer_append_char('_');
+			appended_underscore = true;
+		}
 	}
 	if (!has_char) scratch_buffer_append("module");
 	return scratch_buffer_to_string();
 }
+
 static void create_file_or_fail(BuildOptions *build_options, const char *filename, const char *fmt, ...)
 {
 	if (!fmt)
@@ -341,6 +378,24 @@ static bool check_name(const char *name)
 		if (!char_is_alphanum_(c)) return false;
 	}
 	return true;
+}
+
+static char* get_cwd_project_name()
+{
+	char *full_path = getcwd(NULL, 0);
+	size_t len = strlen(full_path);
+	for (size_t i = len; i > 0; i--)
+	{
+		switch (full_path[i])
+		{
+			case '/':
+#if PLATFORM_WINDOWS
+			case '\\':
+#endif
+			return &full_path[i + 1];
+		}
+	}
+	return full_path;
 }
 
 static void chdir_or_fail(BuildOptions *build_options, const char *name)
@@ -381,4 +436,6 @@ static void mkdir_or_fail(BuildOptions *build_options, const char *name)
 	{
 		delete_dir_and_exit(build_options, "Failed to create directory '%s'.", name);
 	}
+	const char *path = file_append_path_temp(name, ".gitkeep");
+	file_touch(path);
 }

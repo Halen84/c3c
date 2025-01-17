@@ -8,18 +8,24 @@ fault ConversionResult
 	VALUE_OUT_OF_RANGE,
 	VALUE_OUT_OF_UNSIGNED_RANGE,
 }
-/**
- * @require $Type.kindof.is_int() || $Type.kindof == TypeKind.ENUM "Argument was not an integer"
- **/
+
+<*
+ @require $Type.kindof.is_int() "Type was not an integer"
+ @require v.type.kindof == ENUM "Value was not an enum"
+*>
+macro any_to_enum_ordinal(any v, $Type)
+{
+	return any_to_int(v.as_inner(), $Type);
+}
+
+<*
+ @require $Type.kindof.is_int() "Type was not an integer"
+ @require v.type.kindof.is_int() "Value was not an integer"
+*>
 macro any_to_int(any v, $Type)
 {
 	typeid any_type = v.type;
 	TypeKind kind = any_type.kindof;
-	if (kind == TypeKind.ENUM)
-	{
-		any_type = any_type.inner;
-		kind = any_type.kindof;
-	}
 	bool is_mixed_signed = $Type.kindof != any_type.kindof;
 	$Type max = $Type.max;
 	$Type min = $Type.min;
@@ -123,6 +129,37 @@ macro bool is_slice_convertable($Type)
 macro bool is_bool($Type) @const => $Type.kindof == TypeKind.BOOL;
 macro bool is_int($Type) @const  => $Type.kindof == TypeKind.SIGNED_INT || $Type.kindof == TypeKind.UNSIGNED_INT;
 
+<*
+ @require is_numerical($Type) "Expected a numerical type"
+*>
+macro bool is_signed($Type) @const
+{
+	$switch (inner_kind($Type))
+		$case SIGNED_INT:
+		$case FLOAT:
+			return true;
+		$case VECTOR:
+			return is_signed($typefrom($Type.inner));
+		$default:
+			return false;
+	$endswitch
+}
+
+<*
+ @require is_numerical($Type) "Expected a numerical type"
+*>
+macro bool is_unsigned($Type) @const
+{
+	$switch (inner_kind($Type))
+		$case UNSIGNED_INT:
+			return true;
+		$case VECTOR:
+			return is_unsigned($typefrom($Type.inner));
+		$default:
+			return false;
+	$endswitch
+}
+
 macro bool is_indexable($Type) @const
 {
 	return $defined($Type{}[0]);
@@ -178,13 +215,18 @@ macro bool is_vector($Type) @const
 	return $Type.kindof == TypeKind.VECTOR;
 }
 
-macro TypeKind inner_kind($Type) @const
+macro typeid inner_type($Type) @const
 {
 	$if $Type.kindof == TypeKind.DISTINCT:
-		return inner_kind($typefrom($Type.inner));
+		return inner_type($typefrom($Type.inner));
 	$else
-		return $Type.kindof;
+		return $Type.typeid;
 	$endif
+}
+
+macro TypeKind inner_kind($Type) @const
+{
+	return inner_type($Type).kindof;
 }
 
 macro bool is_same($TypeA, $TypeB) @const
@@ -199,7 +241,7 @@ macro bool @has_same(#a, #b, ...) @const
 		return false;
 	$endif
 	$for (var $i = 0; $i < $vacount; $i++)
-		$if @typeid($vaexpr($i)) != $type_a:
+		$if @typeid($vaexpr[$i]) != $type_a:
 			return false;
 		$endif
 	$endfor
@@ -224,9 +266,9 @@ macro bool may_load_atomic($Type) @const
 macro lower_to_atomic_compatible_type($Type) @const
 {
 	$switch ($Type.kindof)
-    $case SIGNED_INT:
+	$case SIGNED_INT:
 	  $case UNSIGNED_INT:
-      return $Type.typeid;
+	  return $Type.typeid;
 		$case DISTINCT:
 			return lower_to_atomic_compatible_type($Type.inner);
 		$case FLOAT:
@@ -268,9 +310,9 @@ macro bool is_equatable_type($Type) @const
 	$endif
 }
 
-/**
- * Checks if a type implements the copy protocol.
- **/
+<*
+ Checks if a type implements the copy protocol.
+*>
 macro bool implements_copy($Type) @const
 {
 	return $defined($Type.copy) && $defined($Type.free);

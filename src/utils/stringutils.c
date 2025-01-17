@@ -68,7 +68,7 @@ static const char *scan_past_underscore(const char *string)
 
 const char *str_unescape(char *string)
 {
-    assert(string[0] == '"');
+    ASSERT0(string[0] == '"');
     char c;
     size_t index = 0;
     while ((c = string++[0]) != '"')
@@ -118,7 +118,7 @@ bool str_is_identifier(const char *string)
 
 bool str_eq(const char *str1, const char *str2)
 {
-	return str1 == str2 || strcmp(str1, str2) == 0;
+	return str1 == str2 || (str1 && str2 && strcmp(str1, str2) == 0);
 }
 
 bool str_is_integer(const char *string)
@@ -169,7 +169,7 @@ char *str_vprintf(const char *var, va_list list)
 	}
 	char *buffer = malloc_string((uint32_t)len + 1);
 	int new_len = vsnprintf(buffer, len + 1, var, list);
-	assert(len == new_len);
+	ASSERT0(len == new_len);
 	(void)new_len;
 	return buffer;
 }
@@ -286,6 +286,7 @@ void str_trim_end(char *str)
 		}
 	}
 }
+
 char *str_cat(const char *a, const char *b)
 {
 	unsigned a_len = (unsigned)strlen(a);
@@ -320,37 +321,99 @@ void scratch_buffer_append_len(const char *string, size_t len)
 	scratch_buffer.len += (uint32_t)len;
 }
 
-char *scratch_buffer_get_quoted(const char *string)
+static void scratch_buffer_append_double_quoted(const char *string)
 {
-	scratch_buffer_clear();
-	scratch_buffer_append_quoted(string);
-	return scratch_buffer_to_string();
-}
-
-void scratch_buffer_append_quoted(const char *string)
-{
-	char c;
-	while ((c = string++[0]) != '\0')
+	scratch_buffer_append_char('"');
+	size_t len = strlen(string);
+	for (size_t i = 0; i < len; )
 	{
+		char c = string[i++];
 		switch (c)
 		{
 			case '"':
 				scratch_buffer_append("\\\"");
 				continue;
 			case '\\':
-				scratch_buffer_append("\\\\");
+			{
+				int backslash_count = 1;
+				for (; i < len && string[i] == '\\'; i++, backslash_count++) {}
+				if (i == len || string[i] == '"')
+				{
+					scratch_buffer_append_char_repeat('\\', backslash_count * 2);
+				}
+				else
+				{
+					scratch_buffer_append_char_repeat('\\', backslash_count);
+				}
 				continue;
-			case '\n':
-				scratch_buffer_append("\\n");
-				continue;
-			case '\'':
-				scratch_buffer_append("\\'");
-				continue;
-			default:
-				scratch_buffer_append_char(c);
-				continue;
-
+			}
 		}
+		scratch_buffer_append_char(c);
+	}
+	scratch_buffer_append_char('"');
+}
+
+#if PLATFORM_WINDOWS
+static bool contains_whitespace_or_quotes(const char *string)
+{
+	char c;
+	while ((c = *string++) != '\0')
+	{
+		switch (c)
+		{
+			case ' ':
+			case '\t':
+			case '\n':
+			case '\r':
+			case '"':
+				return true;
+		}
+	}
+	return false;
+}
+#endif
+
+void scratch_buffer_append_cmd_argument(const char *string)
+{
+#if PLATFORM_WINDOWS
+	if (contains_whitespace_or_quotes(string))
+	{
+		scratch_buffer_append_double_quoted(string);
+	}
+	else
+	{
+		scratch_buffer_append(string);
+	}
+#else
+	scratch_buffer_append_shell_escaped(string);
+#endif
+}
+
+
+void scratch_buffer_append_shell_escaped(const char *string)
+{
+	char c;
+	while ((c = string++[0]) != '\0')
+	{
+		if ((unsigned)c < 0x80)
+		{
+			switch (c)
+			{
+				case LOWER_CHAR_CASE:
+				case UPPER_CHAR_CASE:
+				case NUMBER_CHAR_CASE:
+				case '_':
+				case '/':
+				case '.':
+				case ',':
+				case '-':
+					break;
+				default:
+					scratch_buffer_append_char('\\');
+					break;
+			}
+		}
+		scratch_buffer_append_char(c);
 	}
 }
 void scratch_buffer_append(const char *string)
@@ -397,6 +460,41 @@ void scratch_buffer_printf(const char *format, ...)
 	scratch_buffer.len += len_needed;
 }
 
+void scratch_buffer_append_in_quote(const char *string)
+{
+	size_t len = strlen(string);
+	for (size_t i = 0; i < len; )
+	{
+		char c = string[i++];
+		switch (c)
+		{
+			case '"':
+				scratch_buffer_append("\\\"");
+				continue;
+			case '\\':
+				scratch_buffer_append("\\\\");
+				continue;
+		}
+		scratch_buffer_append_char(c);
+	}
+}
+
+void scratch_buffer_append_remove_space(const char *start, int len)
+{
+	char clast = ' ';
+	int printed = 0;
+	for (int i = 0; i < len; i++)
+	{
+		char ch = start[i];
+		if (ch == '\n' || ch == '\t') ch = ' ';
+		if (ch == ' ' && clast == ch) continue;
+		scratch_buffer_append_char(ch);
+		clast = ch;
+		printed++;
+	}
+	if (clast == ' ' && printed > 0) scratch_buffer.len--;
+}
+
 void scratch_buffer_append_char(char c)
 {
 	if (scratch_buffer.len + 1 > MAX_STRING_BUFFER - 1)
@@ -405,6 +503,14 @@ void scratch_buffer_append_char(char c)
 	}
 
 	scratch_buffer.str[scratch_buffer.len++] = c;
+}
+
+void scratch_buffer_append_char_repeat(char c, size_t count)
+{
+	for (size_t i = 0; i < count; i++)
+	{
+		scratch_buffer_append_char(c);
+	}
 }
 
 char *scratch_buffer_to_string(void)

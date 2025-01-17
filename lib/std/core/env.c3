@@ -115,13 +115,15 @@ enum ArchType
 	XTENSA,       // Xtensa
 }
 
-const OsType OS_TYPE = (OsType)$$OS_TYPE;
-const ArchType ARCH_TYPE = (ArchType)$$ARCH_TYPE;
+const String COMPILER_BUILD_HASH = $$BUILD_HASH;
+const String COMPILER_BUILD_DATE = $$BUILD_DATE;
+const OsType OS_TYPE = OsType.from_ordinal($$OS_TYPE);
+const ArchType ARCH_TYPE = ArchType.from_ordinal($$ARCH_TYPE);
 const bool ARCH_32_BIT = $$REGISTER_SIZE == 32;
 const bool ARCH_64_BIT = $$REGISTER_SIZE == 64;
 const bool LIBC = $$COMPILER_LIBC_AVAILABLE;
 const bool NO_LIBC = !$$COMPILER_LIBC_AVAILABLE;
-const CompilerOptLevel COMPILER_OPT_LEVEL = (CompilerOptLevel)$$COMPILER_OPT_LEVEL;
+const CompilerOptLevel COMPILER_OPT_LEVEL = CompilerOptLevel.from_ordinal($$COMPILER_OPT_LEVEL);
 const bool BIG_ENDIAN = $$PLATFORM_BIG_ENDIAN;
 const bool I128_NATIVE_SUPPORT = $$PLATFORM_I128_SUPPORTED;
 const bool F16_SUPPORT = $$PLATFORM_F16_SUPPORTED;
@@ -133,7 +135,7 @@ const bool BACKTRACE = $$BACKTRACE;
 const usz LLVM_VERSION = $$LLVM_VERSION;
 const bool BENCHMARKING = $$BENCHMARKING;
 const bool TESTING = $$TESTING;
-const MemoryEnvironment MEMORY_ENV = (MemoryEnvironment)$$MEMORY_ENVIRONMENT;
+const MemoryEnvironment MEMORY_ENV = MemoryEnvironment.from_ordinal($$MEMORY_ENVIRONMENT);
 const bool TRACK_MEMORY = DEBUG_SYMBOLS && (COMPILER_SAFE_MODE || TESTING);
 const bool X86_64 = ARCH_TYPE == X86_64;
 const bool X86 = ARCH_TYPE == X86;
@@ -146,8 +148,13 @@ const bool POSIX = LIBC && os_is_posix();
 const bool OPENBSD = LIBC && OS_TYPE == OPENBSD;
 const bool FREEBSD = LIBC && OS_TYPE == FREEBSD;
 const bool NETBSD = LIBC && OS_TYPE == NETBSD;
+const bool BSD_FAMILY = env::FREEBSD || env::OPENBSD || env::NETBSD;
 const bool WASI = LIBC && OS_TYPE == WASI;
 const bool WASM_NOLIBC @builtin = !LIBC && ARCH_TYPE == ArchType.WASM32 || ARCH_TYPE == ArchType.WASM64;
+const bool ADDRESS_SANITIZER = $$ADDRESS_SANITIZER;
+const bool MEMORY_SANITIZER = $$MEMORY_SANITIZER;
+const bool THREAD_SANITIZER = $$THREAD_SANITIZER;
+const bool ANY_SANITIZER = ADDRESS_SANITIZER || MEMORY_SANITIZER || THREAD_SANITIZER;
 
 macro bool os_is_darwin() @const
 {

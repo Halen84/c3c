@@ -6,7 +6,7 @@
 
 LLVMValueRef llvm_store_to_ptr_raw_aligned(GenContext *context, LLVMValueRef pointer, LLVMValueRef value, AlignSize alignment)
 {
-	assert(alignment > 0);
+	ASSERT0(alignment > 0);
 	LLVMValueRef ref = LLVMBuildStore(context->builder, value, pointer);
 	llvm_set_alignment(ref, alignment);
 	return ref;
@@ -18,10 +18,25 @@ void llvm_store_to_ptr_zero(GenContext *context, LLVMValueRef pointer, Type *typ
 	llvm_store_to_ptr_raw_aligned(context, pointer, llvm_get_zero(context, type), type_abi_alignment(type));
 }
 
+bool llvm_temp_as_address(GenContext *c, Type *type)
+{
+	if (type_size(type) <= 2) return false;
+	switch (type_lowering(type)->type_kind)
+	{
+		case TYPE_SLICE:
+		case TYPE_ANY:
+		case TYPE_INTERFACE:
+			// Ok by value.
+			return false;
+		default:
+			return type_is_abi_aggregate(type);
+	}
+}
+
 LLVMValueRef llvm_store_to_ptr_aligned(GenContext *c, LLVMValueRef destination, BEValue *value, AlignSize alignment)
 {
 	// If we have an address but not an aggregate, do a load.
-	assert(alignment);
+	ASSERT0(alignment);
 	llvm_value_fold_optional(c, value);
 	if (value->kind == BE_ADDRESS && !type_is_abi_aggregate(value->type))
 	{
@@ -51,16 +66,16 @@ LLVMValueRef llvm_store_to_ptr_aligned(GenContext *c, LLVMValueRef destination, 
 LLVMValueRef llvm_store(GenContext *c, BEValue *destination, BEValue *value)
 {
 	if (value->type == type_void) return NULL;
-	assert(!type_is_void(value->type));
-	assert(llvm_value_is_addr(destination));
+	ASSERT0(!type_is_void(value->type));
+	ASSERT0(llvm_value_is_addr(destination));
 	return llvm_store_to_ptr_aligned(c, destination->value, value, destination->alignment);
 }
 
 LLVMValueRef llvm_load(GenContext *c, LLVMTypeRef type, LLVMValueRef pointer, AlignSize alignment, const char *name)
 {
-	assert(alignment > 0);
-	assert(!llvm_is_global_eval(c));
-	assert(LLVMGetTypeContext(type) == c->context);
+	ASSERT0(alignment > 0);
+	ASSERT0(!llvm_is_global_eval(c));
+	ASSERT0(LLVMGetTypeContext(type) == c->context);
 	LLVMValueRef value = LLVMBuildLoad2(c->builder, type, pointer, name);
 	llvm_set_alignment(value, alignment ? alignment : llvm_abi_alignment(c, type));
 	return value;

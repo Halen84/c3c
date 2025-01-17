@@ -34,10 +34,10 @@ void sema_analyse_pass_module_hierarchy(Module *module)
 	if (!slice.len) return;
 
 
-	unsigned module_count = vec_size(global_context.module_list);
+	unsigned module_count = vec_size(compiler.context.module_list);
 	for (int i = 0; i < module_count; i++)
 	{
-		Module *checked = global_context.module_list[i];
+		Module *checked = compiler.context.module_list[i];
 		Path *checked_name = checked->name;
 		if (checked_name->len != slice.len) continue;
 		// Found the parent! We're done, we add this parent
@@ -77,7 +77,7 @@ void sema_analysis_pass_process_imports(Module *module)
 		{
 			// 3. Begin analysis
 			Decl *import = imports[i];
-			assert(import->resolve_status == RESOLVE_NOT_DONE);
+			ASSERT0(import->resolve_status == RESOLVE_NOT_DONE);
 			import->resolve_status = RESOLVE_RUNNING;
 			// 4. Find the module.
 			Path *path = import->import.path;
@@ -119,7 +119,7 @@ NEXT:;
 		total_import_count += import_count;
 	}
 	(void)total_import_count; // workaround for clang 13.0
-	DEBUG_LOG("Pass finished processing %d import(s) with %d error(s).", total_import_count, global_context.errors_found);
+	DEBUG_LOG("Pass finished processing %d import(s) with %d error(s).", total_import_count, compiler.context.errors_found);
 }
 
 INLINE void register_global_decls(CompilationUnit *unit, Decl **decls)
@@ -150,16 +150,16 @@ INLINE File *sema_load_file(CompilationUnit *unit, SourceSpan span, Expr *filena
 	if (!file)
 	{
 		if (no_file) return no_file;
-		print_error_at(span, "Failed to load file %s: %s", string, error);
+		print_error_at(filename->span, "Failed to load file '%s': %s.", filename->const_expr.bytes.ptr, error);
 		return NULL;
 	}
-	if (global_context.errors_found) return NULL;
+	if (compiler.context.errors_found) return NULL;
 	return file;
 }
 
 static Decl **sema_load_include(CompilationUnit *unit, Decl *decl)
 {
-	if (active_target.trust_level < TRUST_INCLUDE)
+	if (compiler.build.trust_level < TRUST_INCLUDE)
 	{
 		RETURN_PRINT_ERROR_AT(NULL, decl, "'$include' not permitted, trust level must be set to '--trust=include' or '--trust=full' to permit it.");
 	}
@@ -174,47 +174,64 @@ static Decl **sema_load_include(CompilationUnit *unit, Decl *decl)
 	}
 	bool success = sema_analyse_ct_expr(&context, decl->include.filename);
 	sema_context_destroy(&context);
-	if (success) return NULL;
+	if (!success) return NULL;
 	File *file = sema_load_file(unit, decl->span,  decl->include.filename, "$include", NULL);
 	if (!file) return NULL;
-	if (global_context.includes_used++ > MAX_INCLUDES)
+	if (compiler.context.includes_used++ > MAX_INCLUDE_DIRECTIVES)
 	{
-		RETURN_PRINT_ERROR_AT(NULL, decl, "This $include would cause the maximum number of includes (%d) to be exceeded.", MAX_INCLUDES);
+		RETURN_PRINT_ERROR_AT(NULL, decl, "This $include would cause the maximum number of includes (%d) to be exceeded.", MAX_INCLUDE_DIRECTIVES);
 	}
 	return parse_include_file(file, unit);
 }
 
-static Decl **sema_interpret_expand(CompilationUnit *unit, Decl *decl)
+static bool exec_arg_append_to_scratch(Expr *arg)
 {
-	SemaContext context;
-	sema_context_init(&context, unit);
-	FOREACH(Attr *, attr, decl->attributes)
+	ASSERT0(expr_is_const(arg));
+	switch (arg->const_expr.const_kind)
 	{
-		if (attr->attr_kind != ATTRIBUTE_IF)
-		{
-			RETURN_PRINT_ERROR_AT(NULL, attr, "Invalid attribute for '$expand'.");
-		}
+		case CONST_FLOAT:
+			scratch_buffer_append_double(arg->const_expr.fxx.f);
+			return true;
+		case CONST_INTEGER:
+			scratch_buffer_append(int_to_str(arg->const_expr.ixx, 10, false));
+			return true;
+		case CONST_BOOL:
+			scratch_buffer_append(arg->const_expr.b ? "true" : "false");
+			return true;
+		case CONST_REF:
+			scratch_buffer_append(arg->const_expr.global_ref->name);
+			return true;
+		case CONST_ENUM:
+		case CONST_ERR:
+			scratch_buffer_append(arg->const_expr.enum_err_val->name);
+			return true;
+		case CONST_TYPEID:
+			if (!arg->const_expr.typeid->name)
+			{
+				RETURN_PRINT_ERROR_AT(false, arg, "The type '%s' has no trivial name.",
+				                      type_quoted_error_string(arg->const_expr.typeid));
+			}
+			scratch_buffer_append(arg->const_expr.typeid->name);
+			return true;
+		case CONST_STRING:
+			scratch_buffer_append(arg->const_expr.bytes.ptr);
+			return true;
+		case CONST_POINTER:
+			scratch_buffer_append_unsigned_int(arg->const_expr.ptr);
+			return true;
+		case CONST_BYTES:
+		case CONST_INITIALIZER:
+		case CONST_SLICE:
+		case CONST_UNTYPED_LIST:
+		case CONST_MEMBER:
+			return false;
 	}
-	Expr *string = decl->expand_decl;
-	bool success = sema_analyse_ct_expr(&context, string);
-	sema_context_destroy(&context);
-	if (!success) return NULL;
-	if (!expr_is_const_string(string))
-	{
-		RETURN_PRINT_ERROR_AT(NULL, string, "Expected a constant string for '$expand'.");
-	}
-	scratch_buffer_clear();
-	scratch_buffer_printf("%s.%d", unit->file->full_path, string->span.row);
-	File *file = source_file_text_load(scratch_buffer_to_string(), string->const_expr.bytes.ptr);
-	ParseContext parse_context = { .tok = TOKEN_INVALID_TOKEN };
-	ParseContext *c = &parse_context;
-	c->unit = unit;
-	return parse_include_file(file, unit);
+	UNREACHABLE
 }
 
 static Decl **sema_run_exec(CompilationUnit *unit, Decl *decl)
 {
-	if (active_target.trust_level < TRUST_FULL)
+	if (compiler.build.trust_level < TRUST_FULL)
 	{
 		RETURN_PRINT_ERROR_AT(NULL, decl, "'$exec' not permitted, trust level must be set to '--trust=full' to permit it.");
 	}
@@ -230,11 +247,19 @@ static Decl **sema_run_exec(CompilationUnit *unit, Decl *decl)
 	Expr *filename = decl->exec_decl.filename;
 	bool success = sema_analyse_ct_expr(&context, filename);
 	FOREACH(Expr *, arg, decl->exec_decl.args) success &= sema_analyse_ct_expr(&context, arg);
+	Expr *stdin_expr = decl->exec_decl.stdin_string;
+	if (stdin_expr) success &= sema_analyse_ct_expr(&context, stdin_expr);
 	sema_context_destroy(&context);
 	if (!success) return NULL;
 	if (!expr_is_const_string(filename))
 	{
 		RETURN_PRINT_ERROR_AT(NULL, filename, "A filename was expected as the first argument to '$exec'.");
+	}
+	const char *stdin_string = NULL;
+	if (stdin_expr)
+	{
+		if (!expr_is_const_string(stdin_expr)) RETURN_PRINT_ERROR_AT(NULL, stdin_expr, "Expected the stdin parameter to be a compile time string.");
+		stdin_string = stdin_expr->const_expr.bytes.ptr;
 	}
 	scratch_buffer_clear();
 	const char *file_str = filename->const_expr.bytes.ptr;
@@ -247,64 +272,31 @@ static Decl **sema_run_exec(CompilationUnit *unit, Decl *decl)
 	FOREACH_IDX(i, Expr *, arg, decl->exec_decl.args)
 	{
 		if (i) scratch_buffer_append(" ");
-		assert(expr_is_const(arg));
-		switch (arg->const_expr.const_kind)
+		ASSERT0(expr_is_const(arg));
+		if (!exec_arg_append_to_scratch(arg))
 		{
-			case CONST_FLOAT:
-				scratch_buffer_append_double(arg->const_expr.fxx.f);
-				continue;
-			case CONST_INTEGER:
-				scratch_buffer_append(int_to_str(arg->const_expr.ixx, 10));
-				continue;
-			case CONST_BOOL:
-				scratch_buffer_append(arg->const_expr.b ? "true" : "false");
-				continue;
-			case CONST_ENUM:
-			case CONST_ERR:
-				scratch_buffer_append(arg->const_expr.enum_err_val->name);
-				continue;
-			case CONST_TYPEID:
-				if (!arg->const_expr.typeid->name)
-				{
-					RETURN_PRINT_ERROR_AT(NULL, arg, "The type '%s' has no trivial name.",
-					                      type_quoted_error_string(arg->const_expr.typeid));
-				}
-				scratch_buffer_append(arg->const_expr.typeid->name);
-				continue;
-			case CONST_STRING:
-				scratch_buffer_append(arg->const_expr.bytes.ptr);
-				continue;
-			case CONST_POINTER:
-				scratch_buffer_append_unsigned_int(arg->const_expr.ptr);
-				continue;
-			case CONST_BYTES:
-			case CONST_INITIALIZER:
-			case CONST_UNTYPED_LIST:
-			case CONST_MEMBER:
-				RETURN_PRINT_ERROR_AT(NULL, arg,
-				                      "Bytes, initializers and member references may not be used as arguments.");
+			RETURN_PRINT_ERROR_AT(NULL, arg, "Bytes, initializers and member references may not be used as arguments.");
 		}
-		UNREACHABLE
 	}
 	File *file;
 	// TODO fix Win32
 	char *old_path = NULL;
-	if (active_target.script_dir)
+	if (compiler.build.script_dir)
 	{
 		old_path = getcwd(NULL, 0);
-		if (!dir_change(active_target.script_dir))
+		if (!dir_change(compiler.build.script_dir))
 		{
 			free(old_path);
-			RETURN_PRINT_ERROR_AT(NULL, decl, "Failed to open script dir '%s'", active_target.script_dir);
+			RETURN_PRINT_ERROR_AT(NULL, decl, "Failed to open script dir '%s'", compiler.build.script_dir);
 		}
 	}
 	if (c3_script)
 	{
-		file = compile_and_invoke(file_str, scratch_buffer_copy());
+		file = compile_and_invoke(file_str, scratch_buffer_copy(), stdin_string);
 	}
 	else
 	{
-		const char *output = execute_cmd(scratch_buffer_to_string(), false);
+		const char *output = execute_cmd(scratch_buffer_to_string(), false, stdin_string);
 		file = source_file_text_load(scratch_buffer_to_string(), output);
 	}
 	if (old_path)
@@ -313,12 +305,12 @@ static Decl **sema_run_exec(CompilationUnit *unit, Decl *decl)
 		free(old_path);
 		if (!success)
 		{
-			RETURN_PRINT_ERROR_AT(NULL, decl, "Failed to open run dir '%s'", active_target.script_dir);
+			RETURN_PRINT_ERROR_AT(NULL, decl, "Failed to open run dir '%s'", compiler.build.script_dir);
 		}
 	}
-	if (global_context.includes_used++ > MAX_INCLUDES)
+	if (compiler.context.includes_used++ > MAX_INCLUDE_DIRECTIVES)
 	{
-		RETURN_PRINT_ERROR_AT(NULL, decl, "This $include would cause the maximum number of includes (%d) to be exceeded.", MAX_INCLUDES);
+		RETURN_PRINT_ERROR_AT(NULL, decl, "This $include would cause the maximum number of includes (%d) to be exceeded.", MAX_INCLUDE_DIRECTIVES);
 	}
 	return parse_include_file(file, unit);
 }
@@ -335,9 +327,6 @@ INLINE void register_includes(CompilationUnit *unit, Decl **decls)
 				break;
 			case DECL_CT_INCLUDE:
 				include_decls = sema_load_include(unit, include);
-				break;
-			case DECL_CT_EXPAND:
-				include_decls = sema_interpret_expand(unit, include);
 				break;
 			default:
 				UNREACHABLE
@@ -374,17 +363,66 @@ void sema_analysis_pass_register_global_declarations(Module *module)
 	FOREACH(CompilationUnit *, unit, module->units)
 	{
 		if (unit->if_attr) continue;
-		assert(!unit->ct_includes);
+		ASSERT0(!unit->ct_includes);
 		unit->module = module;
 		DEBUG_LOG("Processing %s.", unit->file->name);
 		register_global_decls(unit, unit->global_decls);
+	}
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
+}
 
+void sema_analysis_pass_process_includes(Module *module)
+{
+	DEBUG_LOG("Pass: Process includes for module '%s'.", module->name->module);
+	FOREACH(CompilationUnit *, unit, module->units)
+	{
+		if (unit->if_attr) continue;
 		// Process all includes
 		sema_process_includes(unit);
-		assert(vec_size(unit->ct_includes) == 0);
+		ASSERT0(vec_size(unit->ct_includes) == 0);
 	}
 
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
+}
+
+
+void sema_analysis_pass_process_methods(Module *module, bool process_generic)
+{
+	DEBUG_LOG("Pass: Process methods register for module '%s'.", module->name->module);
+	FOREACH(CompilationUnit *, unit, module->units)
+	{
+		SemaContext context;
+		sema_context_init(&context, unit);
+		FOREACH(Decl *, method, process_generic ? unit->generic_methods_to_register : unit->methods_to_register)
+		{
+			TypeInfo *parent_type_info = type_infoptr(method->func_decl.type_parent);
+			if (!process_generic && sema_unresolved_type_is_generic(&context, parent_type_info))
+			{
+				vec_add(unit->generic_methods_to_register, method);
+				continue;
+			}
+			sema_analyse_method_register(&context, method);
+			if (method->decl_kind == DECL_MACRO)
+			{
+				vec_add(unit->macro_methods, method);
+			}
+			else
+			{
+				vec_add(unit->methods, method);
+			}
+		}
+		sema_context_destroy(&context);
+		if (process_generic)
+		{
+			vec_resize(unit->generic_methods_to_register, 0);
+		}
+		else
+		{
+			vec_resize(unit->methods_to_register, 0);
+		}
+	}
+
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 void sema_analysis_pass_register_conditional_units(Module *module)
@@ -393,7 +431,7 @@ void sema_analysis_pass_register_conditional_units(Module *module)
 	FOREACH(CompilationUnit *, unit, module->units)
 	{
 		// All ct_includes should already be registered.
-		assert(!unit->ct_includes);
+		ASSERT0(!unit->ct_includes);
 
 		Attr *if_attr = unit->if_attr;
 		if (!if_attr && !unit->attr_links) continue;
@@ -425,7 +463,7 @@ CHECK_LINK:
 		{
 			Expr **exprs = attr->exprs;
 			unsigned args = vec_size(exprs);
-			assert(args > 0 && "Should already have been checked.");
+			ASSERT0(args > 0 && "Should already have been checked.");
 			Expr *cond = args > 1 ? attr->exprs[0] : NULL;
 			if (cond && !sema_analyse_expr(&context, cond)) goto FAIL_CONTEXT;
 			bool start = cond && expr_is_const_bool(cond) ? 1 : 0;
@@ -456,7 +494,7 @@ FAIL_CONTEXT:
 		sema_context_destroy(&context);
 		break;
 	}
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 void sema_analysis_pass_register_conditional_declarations(Module *module)
@@ -488,7 +526,7 @@ RETRY_INCLUDES:
 		// We might have gotten more declarations.
 		if (vec_size(unit->global_cond_decls) > 0) goto RETRY;
 	}
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 void sema_analysis_pass_ct_assert(Module *module)
@@ -510,7 +548,7 @@ void sema_analysis_pass_ct_assert(Module *module)
 		sema_context_destroy(&context);
 		if (!success) break;
 	}
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 void sema_analysis_pass_ct_echo(Module *module)
@@ -532,7 +570,7 @@ void sema_analysis_pass_ct_echo(Module *module)
 		sema_context_destroy(&context);
 		if (!success) break;
 	}
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 static inline bool analyse_func_body(SemaContext *context, Decl *decl)
@@ -544,10 +582,10 @@ static inline bool analyse_func_body(SemaContext *context, Decl *decl)
 		return decl_poison(decl);
 	}
 	// Don't analyse functions that are tests.
-	if (decl->func_decl.attr_test && !active_target.testing) return true;
+	if (decl->func_decl.attr_test && !compiler.build.testing) return true;
 
 	// Don't analyse functions that are benchmarks.
-	if (decl->func_decl.attr_benchmark && !active_target.benchmarking) return true;
+	if (decl->func_decl.attr_benchmark && !compiler.build.benchmarking) return true;
 
 	if (!sema_analyse_function_body(context, decl)) return decl_poison(decl);
 	return true;
@@ -569,7 +607,7 @@ INLINE void sema_analyse_inner_func_ptr(SemaContext *c, Decl *decl)
 	}
 	if (inner->type_kind != TYPE_FUNC_PTR) return;
 	Type *func = inner->pointer;
-	assert(func->type_kind == TYPE_FUNC_RAW);
+	ASSERT0(func->type_kind == TYPE_FUNC_RAW);
 	if (!sema_resolve_type_decl(c, func)) decl_poison(decl);
 }
 
@@ -619,7 +657,7 @@ void sema_analysis_pass_decls(Module *module)
 		}
 		sema_context_destroy(&context);
 	}
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 void sema_analysis_pass_lambda(Module *module)
@@ -640,7 +678,7 @@ void sema_analysis_pass_lambda(Module *module)
 		sema_context_destroy(&context);
 	}
 
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 static inline bool sema_check_interfaces(SemaContext *context, Decl *decl)
@@ -713,7 +751,7 @@ void sema_analysis_pass_interface(Module *module)
 		sema_context_destroy(&context);
 	}
 
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }
 
 void sema_analysis_pass_functions(Module *module)
@@ -736,5 +774,5 @@ void sema_analysis_pass_functions(Module *module)
 		sema_context_destroy(&context);
 	}
 
-	DEBUG_LOG("Pass finished with %d error(s).", global_context.errors_found);
+	DEBUG_LOG("Pass finished with %d error(s).", compiler.context.errors_found);
 }

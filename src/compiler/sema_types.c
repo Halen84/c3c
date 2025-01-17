@@ -186,13 +186,13 @@ static inline bool sema_resolve_array_type(SemaContext *context, TypeInfo *type,
 		default:
 			UNREACHABLE
 	}
-	assert(!type->array.len || sema_cast_const(type->array.len));
+	ASSERT0(!type->array.len || sema_cast_const(type->array.len));
 	type->resolve_status = RESOLVE_DONE;
 	return true;
 }
 
 
-static bool sema_resolve_type_identifier(SemaContext *context, TypeInfo *type_info)
+static bool sema_resolve_type_identifier(SemaContext *context, TypeInfo *type_info, ResolveTypeKind resolve_type_kind)
 {
 	if (type_info->unresolved.name == type_string->name && !type_info->unresolved.path)
 	{
@@ -224,8 +224,15 @@ static bool sema_resolve_type_identifier(SemaContext *context, TypeInfo *type_in
 			type_info->type = decl->type;
 			type_info->resolve_status = RESOLVE_DONE;
 			return true;
-		case DECL_TYPEDEF:
 		case DECL_DISTINCT:
+			if (resolve_type_kind & RESOLVE_TYPE_NO_CHECK_DISTINCT)
+			{
+				type_info->type = decl->type;
+				type_info->resolve_status = RESOLVE_DONE;
+				return true;
+			}
+			FALLTHROUGH;
+		case DECL_TYPEDEF:
 			if (!sema_analyse_decl(context, decl)) return type_info_poison(type_info);
 			type_info->type = decl->type;
 			type_info->resolve_status = RESOLVE_DONE;
@@ -241,8 +248,8 @@ static bool sema_resolve_type_identifier(SemaContext *context, TypeInfo *type_in
 					SEMA_ERROR(type_info, "You need to assign a type to '%s' before using it.", decl->name);
 					return false;
 				}
-				assert(decl->var.init_expr->expr_kind == EXPR_TYPEINFO);
-				assert(decl->var.init_expr->resolve_status == RESOLVE_DONE);
+				ASSERT0(decl->var.init_expr->expr_kind == EXPR_TYPEINFO);
+				ASSERT0(decl->var.init_expr->resolve_status == RESOLVE_DONE);
 				*type_info = *decl->var.init_expr->type_expr;
 				return true;
 			}
@@ -262,7 +269,6 @@ static bool sema_resolve_type_identifier(SemaContext *context, TypeInfo *type_in
 		case DECL_DECLARRAY:
 		case DECL_BODYPARAM:
 		case DECL_CT_INCLUDE:
-		case DECL_CT_EXPAND:
 		case DECL_CT_EXEC:
 		case DECL_GLOBALS:
 			UNREACHABLE
@@ -276,7 +282,7 @@ static bool sema_resolve_type_identifier(SemaContext *context, TypeInfo *type_in
 INLINE bool sema_resolve_evaltype(SemaContext *context, TypeInfo *type_info, ResolveTypeKind resolve_kind)
 {
 	Expr *expr = type_info->unresolved_type_expr;
-	Expr *inner = sema_ct_eval_expr(context, "$evaltype", expr, true);
+	Expr *inner = sema_ct_eval_expr(context, true, expr, true);
 	if (!inner) return type_info_poison(type_info);
 	if (inner->expr_kind != EXPR_TYPEINFO)
 	{
@@ -285,8 +291,10 @@ INLINE bool sema_resolve_evaltype(SemaContext *context, TypeInfo *type_info, Res
 	}
 	TypeInfo *inner_type = inner->type_expr;
 	if (!sema_resolve_type(context, inner_type, resolve_kind)) return false;
-	switch (type_storage_type(inner_type->type))
+	switch (sema_resolve_storage_type(context, inner_type->type))
 	{
+		case STORAGE_ERROR:
+			return false;
 		case STORAGE_VOID:
 		case STORAGE_UNKNOWN:
 		case STORAGE_NORMAL:
@@ -304,16 +312,28 @@ INLINE bool sema_resolve_evaltype(SemaContext *context, TypeInfo *type_info, Res
 INLINE bool sema_resolve_typeof(SemaContext *context, TypeInfo *type_info)
 {
 	Expr *expr = type_info->unresolved_type_expr;
-	if (!sema_analyse_expr_lvalue_fold_const(context, expr)) return false;
+	bool in_no_eval = context->call_env.in_no_eval;
+	context->call_env.in_no_eval = true;
+	bool success = sema_analyse_expr_value(context, expr);
+	context->call_env.in_no_eval = in_no_eval;
+	if (!success) return false;
 	Type *expr_type = expr->type;
-	switch (type_storage_type(expr->type))
+	if (expr_type->type_kind == TYPE_FUNC_RAW) expr_type = type_get_func_ptr(expr_type);
+	switch (sema_resolve_storage_type(context, expr_type))
 	{
+		case STORAGE_ERROR:
+			return false;
 		case STORAGE_NORMAL:
 		case STORAGE_VOID:
 		case STORAGE_UNKNOWN:
 			type_info->type = expr_type;
 			return true;
 		case STORAGE_WILDCARD:
+			if (expr_type->type_kind == TYPE_OPTIONAL)
+			{
+				type_info->type = type_get_optional(type_void);
+				return true;
+			}
 			RETURN_SEMA_ERROR(expr, "This %sexpression lacks a concrete type.", type_is_optional(expr_type) ? "optional " : "");
 		case STORAGE_COMPILE_TIME:
 			RETURN_SEMA_ERROR(expr, "This expression has a compile time type %s.", type_quoted_error_string(expr_type));
@@ -340,12 +360,27 @@ INLINE bool sema_resolve_vatype(SemaContext *context, TypeInfo *type_info)
 	{
 		RETURN_SEMA_ERROR(type_info, "'%s' can only be used inside of a macro.", token_type_to_string(TOKEN_CT_VATYPE));
 	}
-	ASSIGN_EXPR_OR_RET(Expr *arg_expr, sema_expr_analyse_ct_arg_index(context, type_info->unresolved_type_expr, NULL,
-	                                                                  true), false);
-	if (!sema_analyse_expr_lvalue(context, arg_expr)) return false;
+	ASSIGN_EXPR_OR_RET(Expr *arg_expr, sema_expr_analyse_ct_arg_index(context, type_info->unresolved_type_expr, NULL), false);
+	if (!sema_analyse_expr_value(context, arg_expr)) return false;
 	if (arg_expr->expr_kind != EXPR_TYPEINFO) RETURN_SEMA_ERROR(arg_expr, "The argument was not a type.");
 	type_info->type = arg_expr->type_expr->type;
 	return true;
+}
+
+bool sema_unresolved_type_is_generic(SemaContext *context, TypeInfo *type_info)
+{
+	RETRY:
+	if (type_info->kind == TYPE_INFO_GENERIC) return true;
+	if (type_info->resolve_status == RESOLVE_DONE) return false;
+	if (type_info->kind != TYPE_INFO_IDENTIFIER) return false;
+	if (type_info->subtype != TYPE_COMPRESSED_NONE) return false;
+	Decl *decl = sema_find_path_symbol(context, type_info->unresolved.name, type_info->unresolved.path);
+	if (!decl) return false;
+	if (decl->decl_kind != DECL_TYPEDEF) return false;
+	if (decl->resolve_status == RESOLVE_DONE) return false;
+	if (decl->typedef_decl.is_func) return false;
+	type_info = decl->typedef_decl.type_info;
+	goto RETRY;
 }
 
 // Foo(<...>)
@@ -354,14 +389,23 @@ INLINE bool sema_resolve_generic_type(SemaContext *context, TypeInfo *type_info)
 	TypeInfo *inner = type_info->generic.base;
 	if (inner->kind != TYPE_INFO_IDENTIFIER && inner->subtype != TYPE_COMPRESSED_NONE && !inner->optional)
 	{
-		SEMA_ERROR(inner, "Parameterization required a concrete type name here.");
-		return false;
+		RETURN_SEMA_ERROR(inner, "Parameterization required a concrete type name here.");
 	}
-	assert(inner->resolve_status == RESOLVE_NOT_DONE);
+	ASSERT0(inner->resolve_status == RESOLVE_NOT_DONE);
 
-	Decl *type = sema_analyse_parameterized_identifier(context, inner->unresolved.path, inner->unresolved.name, inner->span, type_info->generic.params);
+	bool was_recursive = false;
+	Decl *type = sema_analyse_parameterized_identifier(context, inner->unresolved.path, inner->unresolved.name,
+	                                                   inner->span, type_info->generic.params, &was_recursive);
 	if (!decl_ok(type)) return false;
 	type_info->type = type->type;
+	if (!was_recursive) return true;
+	if (!context->current_macro && (context->call_env.kind == CALL_ENV_FUNCTION || context->call_env.kind == CALL_ENV_FUNCTION_STATIC)
+	    && !context->call_env.current_function->func_decl.in_macro)
+	{
+		SEMA_DEPRECATED(type_info, "Nested generic type declarations outside of macros is a deprecated feature, please use 'def' to create an alias.");
+		// TODO, completely disallow
+		// RETURN_SEMA_ERROR(type_info, "Direct generic type declarations are only allowed inside of macros. Use `def` to define an alias for the type instead.");
+	}
 	return true;
 }
 
@@ -405,7 +449,7 @@ static inline bool sema_resolve_type(SemaContext *context, TypeInfo *type_info, 
 		case TYPE_INFO_CT_IDENTIFIER:
 		case TYPE_INFO_IDENTIFIER:
 			// $Type or Foo
-			if (!sema_resolve_type_identifier(context, type_info)) return type_info_poison(type_info);
+			if (!sema_resolve_type_identifier(context, type_info, resolve_type_kind)) return type_info_poison(type_info);
 			goto APPEND_QUALIFIERS;
 		case TYPE_INFO_EVALTYPE:
 			if (!sema_resolve_evaltype(context, type_info, resolve_type_kind)) return type_info_poison(type_info);
@@ -489,7 +533,7 @@ FuncMap map;
 
 void type_func_prototype_init(uint32_t capacity)
 {
-	assert(is_power_of_two(capacity) && capacity > 1);
+	ASSERT0(is_power_of_two(capacity) && capacity > 1);
 	map.entries = CALLOC(capacity * sizeof(FuncTypeEntry));
 	map.capacity = capacity;
 	map.max_load = (uint32_t)(TABLE_MAX_LOAD * capacity);
@@ -593,9 +637,9 @@ static inline Type *func_create_new_func_proto(Signature *sig, CallABI abi, uint
 	scratch_buffer_append("fn ");
 	type_append_name_to_scratch(proto->rtype);
 	scratch_buffer_append_char('(');
-	FOREACH_IDX(index, Type *, val, proto->param_types)
+	FOREACH_IDX(idx, Type *, val, proto->param_types)
 	{
-		if (index != 0) scratch_buffer_append(", ");
+		if (idx != 0) scratch_buffer_append(", ");
 		type_append_name_to_scratch(val);
 	}
 	scratch_buffer_append_char(')');

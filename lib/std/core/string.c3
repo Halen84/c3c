@@ -1,6 +1,8 @@
 module std::core::string;
 import std::ascii;
+import std::io;
 
+distinct String @if(!$defined(String)) = inline char[];
 distinct ZString = inline char*;
 distinct WString = inline Char16*;
 def Char32 = uint;
@@ -31,70 +33,78 @@ fault NumberConversion
 	FLOAT_OUT_OF_RANGE,
 }
 
-/**
- * Return a temporary String created using the formatting function.
- *
- * @param [in] fmt `The formatting string`
- **/
-macro String tformat(String fmt, ...)
-{
-	DString str = dstring::temp_with_capacity(fmt.len + $vacount * 8);
-	str.appendf(fmt, $vasplat());
-	return str.str_view();
-}
 
-/**
- * Return a temporary ZString created using the formatting function.
- *
- * @param [in] fmt `The formatting string`
- **/
-macro ZString tformat_zstr(String fmt, ...)
+<*
+ Return a temporary ZString created using the formatting function.
+
+ @param [in] fmt `The formatting string`
+*>
+fn ZString tformat_zstr(String fmt, args...)
 {
-	DString str = dstring::temp_with_capacity(fmt.len + $vacount * 8);
-	str.appendf(fmt, $vasplat());
+	DString str = dstring::temp_with_capacity(fmt.len + args.len * 8);
+	str.appendf(fmt, ...args);
 	return str.zstr_view();
 }
 
-/**
- * Return a new String created using the formatting function.
- *
- * @param [in] fmt `The formatting string`
- * @param [inout] allocator `The allocator to use`
- **/
-macro String new_format(String fmt, ..., Allocator allocator = allocator::heap())
+<*
+ Return a new String created using the formatting function.
+
+ @param [inout] allocator `The allocator to use`
+ @param [in] fmt `The formatting string`
+*>
+fn String format(String fmt, args..., Allocator allocator)
 {
 	@pool(allocator)
 	{
-		DString str = dstring::temp_with_capacity(fmt.len + $vacount * 8);
-		str.appendf(fmt, $vasplat());
+		DString str = dstring::temp_with_capacity(fmt.len + args.len * 8);
+		str.appendf(fmt, ...args);
 		return str.copy_str(allocator);
 	};
 }
 
-/**
- * Return a new ZString created using the formatting function.
- *
- * @param [in] fmt `The formatting string`
- * @param [inout] allocator `The allocator to use`
- **/
-macro ZString new_format_zstr(String fmt, ..., Allocator allocator = allocator::heap())
+<*
+ Return a heap allocated String created using the formatting function.
+
+ @param [in] fmt `The formatting string`
+*>
+fn String new_format(String fmt, args..., Allocator allocator = null) => format(fmt, ...args, allocator: allocator ?: allocator::heap());
+
+<*
+ Return a temporary String created using the formatting function.
+
+ @param [in] fmt `The formatting string`
+*>
+fn String tformat(String fmt, args...)
+{
+	DString str = dstring::temp_with_capacity(fmt.len + args.len * 8);
+	str.appendf(fmt, ...args);
+	return str.str_view();
+}
+
+<*
+ Return a new ZString created using the formatting function.
+
+ @param [in] fmt `The formatting string`
+ @param [inout] allocator `The allocator to use`
+*>
+fn ZString new_format_zstr(String fmt, args..., Allocator allocator = allocator::heap())
 {
 	@pool(allocator)
 	{
-		DString str = dstring::temp_with_capacity(fmt.len + $vacount * 8);
-		str.appendf(fmt, $vasplat());
+		DString str = dstring::temp_with_capacity(fmt.len + args.len * 8);
+		str.appendf(fmt, ...args);
 		return str.copy_zstr(allocator);
 	};
 }
 
-/**
- * Check if a character is in a set.
- *
- * @param c `the character to check`
- * @param [in] set `The formatting string`
- * @pure
- * @return `True if a character is in the set`
- **/
+<*
+ Check if a character is in a set.
+
+ @param c `the character to check`
+ @param [in] set `The formatting string`
+ @pure
+ @return `True if a character is in the set`
+*>
 macro bool char_in_set(char c, String set)
 {
 	foreach (ch : set) if (ch == c) return true;
@@ -126,33 +136,59 @@ fn String join_new(String[] s, String joiner, Allocator allocator = allocator::h
 	};
 }
 
-/**
- * Remove characters from the front and end of a string.
- *
- * @param [in] string `The string to trim`
- * @param [in] to_trim `The set of characters to trim, defaults to whitespace`
- * @pure
- * @return `a substring of the string passed in`
- **/
+<*
+ Remove characters from the front and end of a string.
+
+ @param [in] string `The string to trim`
+ @param [in] to_trim `The set of characters to trim, defaults to whitespace`
+ @pure
+ @return `a substring of the string passed in`
+*>
 fn String String.trim(string, String to_trim = "\t\n\r ")
+{
+    return string.trim_left(to_trim).trim_right(to_trim);
+}
+
+<*
+ Remove characters from the front of a string.
+
+ @param [in] string `The string to trim`
+ @param [in] to_trim `The set of characters to trim, defaults to whitespace`
+ @pure
+ @return `a substring of the string passed in`
+*>
+fn String String.trim_left(string, String to_trim = "\t\n\r ")
 {
 	usz start = 0;
 	usz len = string.len;
 	while (start < len && char_in_set(string[start], to_trim)) start++;
 	if (start == len) return string[:0];
-	usz end = len - 1;
-	while (end > start && char_in_set(string[end], to_trim)) end--;
-	return string[start..end];
+	return string[start..];
 }
 
-/**
- * Check if the String starts with the needle.
- *
- * @param [in] string
- * @param [in] needle
- * @pure
- * @return `'true' if the string starts with the needle`
- **/
+<*
+ Remove characters from the end of a string.
+
+ @param [in] string `The string to trim`
+ @param [in] to_trim `The set of characters to trim, defaults to whitespace`
+ @pure
+ @return `a substring of the string passed in`
+*>
+fn String String.trim_right(string, String to_trim = "\t\n\r ")
+{
+	usz len = string.len;
+	while (len > 0 && char_in_set(string[len - 1], to_trim)) len--;
+	return string[:len];
+}
+
+<*
+ Check if the String starts with the needle.
+
+ @param [in] string
+ @param [in] needle
+ @pure
+ @return `'true' if the string starts with the needle`
+*>
 fn bool String.starts_with(string, String needle)
 {
 	if (needle.len > string.len) return false;
@@ -160,14 +196,14 @@ fn bool String.starts_with(string, String needle)
 	return string[:needle.len] == needle;
 }
 
-/**
- * Check if the String ends with the needle.
- *
- * @param [in] string
- * @param [in] needle
- * @pure
- * @return `'true' if the string ends with the needle`
- **/
+<*
+ Check if the String ends with the needle.
+
+ @param [in] string
+ @param [in] needle
+ @pure
+ @return `'true' if the string ends with the needle`
+*>
 fn bool String.ends_with(string, String needle)
 {
 	if (needle.len > string.len) return false;
@@ -175,28 +211,28 @@ fn bool String.ends_with(string, String needle)
 	return string[^needle.len..] == needle;
 }
 
-/**
- * Strip the front of the string if the prefix exists.
- *
- * @param [in] string
- * @param [in] needle
- * @pure
- * @return `the substring with the prefix removed`
- **/
+<*
+ Strip the front of the string if the prefix exists.
+
+ @param [in] string
+ @param [in] needle
+ @pure
+ @return `the substring with the prefix removed`
+*>
 fn String String.strip(string, String needle)
 {
 	if (!needle.len || !string.starts_with(needle)) return string;
 	return string[needle.len..];
 }
 
-/**
- * Strip the end of the string if the suffix exists.
- *
- * @param [in] string
- * @param [in] needle
- * @pure
- * @return `the substring with the suffix removed`
- **/
+<*
+ Strip the end of the string if the suffix exists.
+
+ @param [in] string
+ @param [in] needle
+ @pure
+ @return `the substring with the suffix removed`
+*>
 fn String String.strip_end(string, String needle)
 {
 	if (!needle.len || !string.ends_with(needle)) return string;
@@ -204,18 +240,19 @@ fn String String.strip_end(string, String needle)
 	return string[:(string.len - needle.len)];
 }
 
+<*
+ Split a string into parts, e.g "a|b|c" split with "|" yields { "a", "b", "c" }
 
-/**
- * Split a string into parts, e.g "a|b|c" split with "|" yields { "a", "b", "c" }
- *
- * @param [in] s
- * @param [in] needle
- * @param [&inout] allocator "The allocator, defaults to the heap allocator"
- * @param max "Max number of elements, 0 means no limit, defaults to 0"
- * @require needle.len > 0 "The needle must be at least 1 character long"
- * @ensure return.len > 0
- **/
-fn String[] String.split(s, String needle, usz max = 0, Allocator allocator = allocator::heap())
+ @param [in] s
+ @param [in] needle
+ @param max "Max number of elements, 0 means no limit, defaults to 0"
+ @param skip_empty "True to skip empty elements"
+ @param [&inout] allocator "The allocator to use for the String[]"
+
+ @require needle.len > 0 "The needle must be at least 1 character long"
+ @ensure return.len > 0
+*>
+fn String[] String.split(s, String needle, usz max = 0, Allocator allocator = allocator::heap(), bool skip_empty = false)
 {
 	usz capacity = 16;
 	usz i = 0;
@@ -235,6 +272,11 @@ fn String[] String.split(s, String needle, usz max = 0, Allocator allocator = al
 			res = s;
 			no_more = true;
 		}
+		if (!res.len && skip_empty)
+        {
+        	continue;
+        }
+
 		if (i == capacity)
 		{
 			capacity *= 2;
@@ -245,42 +287,98 @@ fn String[] String.split(s, String needle, usz max = 0, Allocator allocator = al
 	return holder[:i];
 }
 
-/**
- * This function is identical to String.split, but implicitly uses the
- * temporary allocator.
- *
- * @param [in] s
- * @param [in] needle
- * @param max "Max number of elements, 0 means no limit, defaults to 0"
- **/
-fn String[] String.tsplit(s, String needle, usz max = 0)
+<*
+ Split a string into parts, e.g "a|b|c" split with "|" yields { "a", "b", "c" }, using the heap allocator
+ to store the parts.
+
+ @param [in] s
+ @param [in] needle
+ @param max "Max number of elements, 0 means no limit, defaults to 0"
+ @param skip_empty "True to skip empty elements"
+ @require needle.len > 0 "The needle must be at least 1 character long"
+ @ensure return.len > 0
+*>
+fn String[] String.new_split(s, String needle, usz max = 0, bool skip_empty) => s.split(needle, max, allocator::heap(), skip_empty) @inline;
+
+<*
+ This function is identical to String.split, but implicitly uses the
+ temporary allocator.
+
+ @param [in] s
+ @param [in] needle
+ @param max "Max number of elements, 0 means no limit, defaults to 0"
+ @param skip_empty "True to skip empty elements"
+*>
+fn String[] String.tsplit(s, String needle, usz max = 0, bool skip_empty = false) => s.split(needle, max, allocator::temp(), skip_empty) @inline;
+
+fault SplitResult { BUFFER_EXCEEDED }
+
+<*
+ Split a string into parts, e.g "a|b|c" split with "|" yields { "a", "b", "c" }
+
+ @param [in] s
+ @param [in] needle
+ @param [inout] buffer
+ @param max "Max number of elements, 0 means no limit, defaults to 0"
+ @require needle.len > 0 "The needle must be at least 1 character long"
+ @ensure return.len > 0
+ @return! SplitResult.BUFFER_EXCEEDED `If there are more elements than would fit the buffer`
+*>
+fn String[]! String.split_to_buffer(s, String needle, String[] buffer, usz max = 0, bool skip_empty = false)
 {
-	return s.split(needle, max, allocator::temp()) @inline;
+	usz max_capacity = buffer.len;
+	usz i = 0;
+	bool no_more = false;
+	while (!no_more)
+	{
+		usz! index = i == max - 1 ? SearchResult.MISSING? : s.index_of(needle);
+		String res @noinit;
+		if (try index)
+		{
+			res = s[:index];
+			s = s[index + needle.len..];
+		}
+		else
+		{
+			res = s;
+			no_more = true;
+		}
+		if (!res.len && skip_empty)
+		{
+			continue;
+		}
+		if (i == max_capacity)
+		{
+			return SplitResult.BUFFER_EXCEEDED?;
+		}
+		buffer[i++] = res;
+	}
+	return buffer[:i];
 }
 
-/**
- * Check if a substring is found in the string.
+<*
+ Check if a substring is found in the string.
 
- * @param [in] s
- * @param [in] needle "The string to look for."
- * @pure
- * @return "true if the string contains the substring, false otherwise"
- **/
+ @param [in] s
+ @param [in] needle "The string to look for."
+ @pure
+ @return "true if the string contains the substring, false otherwise"
+*>
 fn bool String.contains(s, String needle)
 {
 	return @ok(s.index_of(needle));
 }
 
-/**
- * Find the index of the first incidence of a string.
- *
- * @param [in] s
- * @param needle "The character to look for"
- * @pure
- * @ensure return < s.len
- * @return "the index of the needle"
- * @return! SearchResult.MISSING "if the needle cannot be found"
- **/
+<*
+ Find the index of the first incidence of a string.
+
+ @param [in] s
+ @param needle "The character to look for"
+ @pure
+ @ensure return < s.len
+ @return "the index of the needle"
+ @return! SearchResult.MISSING "if the needle cannot be found"
+*>
 fn usz! String.index_of_char(s, char needle)
 {
 	foreach (i, c : s)
@@ -290,17 +388,40 @@ fn usz! String.index_of_char(s, char needle)
 	return SearchResult.MISSING?;
 }
 
-/**
- * Find the index of the first incidence of a character.
- *
- * @param [in] s
- * @param needle "The character to look for"
- * @param start_index "The index to start with, may exceed max index."
- * @pure
- * @ensure return < s.len
- * @return "the index of the needle"
- * @return! SearchResult.MISSING "if the needle cannot be found starting from the start_index"
- **/
+<*
+ Find the index of the first incidence of a one of the chars.
+
+ @param [in] s
+ @param [in] needle "The characters to look for"
+ @pure
+ @ensure return < s.len
+ @return "the index of the needle"
+ @return! SearchResult.MISSING "if the needle cannot be found"
+*>
+fn usz! String.index_of_chars(String s, char[] needle)
+{
+    foreach (i, c : s)
+    {
+        foreach (j, pin : needle)
+        {
+            if (c == pin) return i;
+        }
+    }
+
+    return SearchResult.MISSING?;
+}
+
+<*
+ Find the index of the first incidence of a character.
+
+ @param [in] s
+ @param needle "The character to look for"
+ @param start_index "The index to start with, may exceed max index."
+ @pure
+ @ensure return < s.len
+ @return "the index of the needle"
+ @return! SearchResult.MISSING "if the needle cannot be found starting from the start_index"
+*>
 fn usz! String.index_of_char_from(s, char needle, usz start_index)
 {
 	usz len = s.len;
@@ -312,16 +433,16 @@ fn usz! String.index_of_char_from(s, char needle, usz start_index)
 	return SearchResult.MISSING?;
 }
 
-/**
- * Find the index of the first incidence of a character starting from the end.
- *
- * @param [in] s
- * @param needle "the character to find"
- * @pure
- * @ensure return < s.len
- * @return "the index of the needle"
- * @return! SearchResult.MISSING "if the needle cannot be found"
- **/
+<*
+ Find the index of the first incidence of a character starting from the end.
+
+ @param [in] s
+ @param needle "the character to find"
+ @pure
+ @ensure return < s.len
+ @return "the index of the needle"
+ @return! SearchResult.MISSING "if the needle cannot be found"
+*>
 fn usz! String.rindex_of_char(s, char needle)
 {
 	foreach_r (i, c : s)
@@ -331,17 +452,17 @@ fn usz! String.rindex_of_char(s, char needle)
 	return SearchResult.MISSING?;
 }
 
-/**
- * Find the index of the first incidence of a string.
- *
- * @param [in] s
- * @param [in] needle
- * @pure
- * @ensure return < s.len
- * @require needle.len > 0 : "The needle must be len 1 or more"
- * @return "the index of the needle"
- * @return! SearchResult.MISSING "if the needle cannot be found"
- **/
+<*
+ Find the index of the first incidence of a string.
+
+ @param [in] s
+ @param [in] needle
+ @pure
+ @ensure return < s.len
+ @require needle.len > 0 : "The needle must be len 1 or more"
+ @return "the index of the needle"
+ @return! SearchResult.MISSING "if the needle cannot be found"
+*>
 fn usz! String.index_of(s, String needle)
 {
 	usz needed = needle.len;
@@ -356,17 +477,17 @@ fn usz! String.index_of(s, String needle)
 	return SearchResult.MISSING?;
 }
 
-/**
- * Find the index of the last incidence of a string.
- *
- * @param [in] s
- * @param [in] needle
- * @pure
- * @ensure return < s.len
- * @require needle.len > 0 "The needle must be len 1 or more"
- * @return "the index of the needle"
- * @return! SearchResult.MISSING "if the needle cannot be found"
- **/
+<*
+ Find the index of the last incidence of a string.
+
+ @param [in] s
+ @param [in] needle
+ @pure
+ @ensure return < s.len
+ @require needle.len > 0 "The needle must be len 1 or more"
+ @return "the index of the needle"
+ @return! SearchResult.MISSING "if the needle cannot be found"
+*>
 fn usz! String.rindex_of(s, String needle)
 {
 	usz needed = needle.len;
@@ -431,6 +552,11 @@ fn String String.tconcat(s1, String s2) => s1.concat(s2, allocator::temp());
 
 fn ZString String.zstr_tcopy(s) => s.zstr_copy(allocator::temp()) @inline;
 
+<*
+ Copy this string, by duplicating the string, always adding a zero byte
+ sentinel, so that it safely can be converted to a ZString by a
+ cast.
+*>
 fn String String.copy(s, Allocator allocator = allocator::heap())
 {
 	usz len = s.len;
@@ -442,14 +568,14 @@ fn String String.copy(s, Allocator allocator = allocator::heap())
 
 fn void String.free(&s, Allocator allocator = allocator::heap())
 {
-	if (!s.len) return;
+	if (!s.ptr) return;
 	allocator::free(allocator, s.ptr);
 	*s = "";
 }
 
 fn String String.tcopy(s) => s.copy(allocator::temp()) @inline;
 
-fn String ZString.copy(z, Allocator allocator = allocator::temp())
+fn String ZString.copy(z, Allocator allocator = allocator::heap())
 {
 	return z.str_view().copy(allocator) @inline;
 }
@@ -459,12 +585,12 @@ fn String ZString.tcopy(z)
 	return z.str_view().copy(allocator::temp()) @inline;
 }
 
-/**
- * Convert an UTF-8 string to UTF-16
- * @return "The UTF-16 string as a slice, allocated using the given allocator"
- * @return! UnicodeResult.INVALID_UTF8 "If the string contained an invalid UTF-8 sequence"
- * @return! AllocationFailure "If allocation of the string fails"
- **/
+<*
+ Convert an UTF-8 string to UTF-16
+ @return "The UTF-16 string as a slice, allocated using the given allocator"
+ @return! UnicodeResult.INVALID_UTF8 "If the string contained an invalid UTF-8 sequence"
+ @return! AllocationFailure "If allocation of the string fails"
+*>
 fn Char16[]! String.to_new_utf16(s, Allocator allocator = allocator::heap())
 {
 	usz len16 = conv::utf16len_for_utf8(s);
@@ -474,28 +600,26 @@ fn Char16[]! String.to_new_utf16(s, Allocator allocator = allocator::heap())
 	return data[:len16];
 }
 
-/**
- * Convert an UTF-8 string to UTF-16
- * @return "The UTF-16 string as a slice, allocated using the given allocator"
- * @return! UnicodeResult.INVALID_UTF8 "If the string contained an invalid UTF-8 sequence"
- * @return! AllocationFailure "If allocation of the string fails"
- **/
+<*
+ Convert an UTF-8 string to UTF-16
+ @return "The UTF-16 string as a slice, allocated using the given allocator"
+ @return! UnicodeResult.INVALID_UTF8 "If the string contained an invalid UTF-8 sequence"
+ @return! AllocationFailure "If allocation of the string fails"
+*>
 fn Char16[]! String.to_temp_utf16(s)
 {
 	return s.to_new_utf16(allocator::temp());
 }
 
-fn WString! String.to_new_wstring(s, Allocator allocator = allocator::heap())
+fn WString! String.to_wstring(s, Allocator allocator)
 {
 	return (WString)s.to_new_utf16(allocator).ptr;
 }
 
-fn WString! String.to_temp_wstring(s)
-{
-	return (WString)s.to_temp_utf16().ptr;
-}
+fn WString! String.to_temp_wstring(s) => s.to_wstring(allocator::temp());
+fn WString! String.to_new_wstring(s) => s.to_wstring(allocator::heap());
 
-fn Char32[]! String.to_new_utf32(s, Allocator allocator = allocator::heap())
+fn Char32[]! String.to_utf32(s, Allocator allocator)
 {
 	usz codepoints = conv::utf8_codepoints(s);
 	Char32* data = allocator::alloc_array_try(allocator, Char32, codepoints + 1)!;
@@ -504,17 +628,15 @@ fn Char32[]! String.to_new_utf32(s, Allocator allocator = allocator::heap())
 	return data[:codepoints];
 }
 
-fn Char32[]! String.to_temp_utf32(s)
-{
-	return s.to_new_utf32(allocator::temp());
-}
+fn Char32[]! String.to_new_utf32(s) => s.to_utf32(allocator::heap()) @inline;
+fn Char32[]! String.to_temp_utf32(s) => s.to_utf32(allocator::temp()) @inline;
 
-/**
- * Convert a string to ASCII lower case.
- *
- * @param [inout] s
- * @pure
- **/
+<*
+ Convert a string to ASCII lower case.
+
+ @param [inout] s
+ @pure
+*>
 fn void String.convert_ascii_to_lower(s)
 {
 	foreach (&c : s) if (c.is_upper() @pure) *c += 'a' - 'A';
@@ -527,30 +649,30 @@ fn String String.new_ascii_to_lower(s, Allocator allocator = allocator::heap())
 	return copy;
 }
 
-fn String String.temp_ascii_to_lower(s, Allocator allocator = allocator::heap())
+fn String String.temp_ascii_to_lower(s)
 {
 	return s.new_ascii_to_lower(allocator::temp());
 }
 
-/**
- * Convert a string to ASCII upper case.
- *
- * @param [inout] s
- * @pure
- **/
+<*
+ Convert a string to ASCII upper case.
+
+ @param [inout] s
+ @pure
+*>
 fn void String.convert_ascii_to_upper(s)
 {
 	foreach (&c : s) if (c.is_lower() @pure) *c -= 'a' - 'A';
 }
 
-/**
- * Returns a string converted to ASCII upper case.
- *
- * @param [in] s
- * @param [inout] allocator
- *
- * @return `a new String converted to ASCII upper case.`
- **/
+<*
+ Returns a string converted to ASCII upper case.
+
+ @param [in] s
+ @param [inout] allocator
+
+ @return `a new String converted to ASCII upper case.`
+*>
 fn String String.new_ascii_to_upper(s, Allocator allocator = allocator::heap())
 {
 	String copy = s.copy(allocator);
@@ -563,10 +685,10 @@ fn StringIterator String.iterator(s)
 	return { s, 0 };
 }
 
-/**
- * @param [in] s
- * @return `a temporary String converted to ASCII upper case.`
- **/
+<*
+ @param [in] s
+ @return `a temporary String converted to ASCII upper case.`
+*>
 fn String String.temp_ascii_to_upper(s)
 {
 	return s.new_ascii_to_upper(allocator::temp());
@@ -614,9 +736,9 @@ fn usz String.utf8_codepoints(s)
 }
 
 
-/**
- * @require (base <= 10 && base > 1) || base == 16 : "Unsupported base"
- **/
+<*
+ @require (base <= 10 && base > 1) || base == 16 : "Unsupported base"
+*>
 macro String.to_integer(string, $Type, int base = 10)
 {
 	usz len = string.len;
@@ -705,7 +827,12 @@ fn float! String.to_float(s) => s.to_real(float);
 
 fn Splitter String.splitter(self, String split)
 {
-	return Splitter { self, split, 0 };
+	return { .string = self, .split = split };
+}
+
+fn Splitter String.tokenize(self, String split)
+{
+	return { .string = self, .split = split, .tokenize = true };
 }
 
 struct Splitter
@@ -713,6 +840,8 @@ struct Splitter
 	String string;
 	String split;
 	usz current;
+	bool tokenize;
+	int last_index;
 }
 
 fn void Splitter.reset(&self)
@@ -722,18 +851,33 @@ fn void Splitter.reset(&self)
 
 fn String! Splitter.next(&self)
 {
-	usz len = self.string.len;
-	usz current = self.current;
-	if (current >= len) return IteratorResult.NO_MORE_ELEMENT?;
-	String remaining = self.string[current..];
-	usz! next = remaining.index_of(self.split);
-	if (try next)
+	while (true)
 	{
-		defer self.current = current + next + self.split.len;
-		return remaining[:next];
+		usz len = self.string.len;
+		usz current = self.current;
+		if (current >= len) return IteratorResult.NO_MORE_ELEMENT?;
+		String remaining = self.string[current..];
+		usz! next = remaining.index_of(self.split);
+		if (try next)
+		{
+			self.current = current + next + self.split.len;
+			if (!next && self.tokenize) continue;
+			return remaining[:next];
+		}
+		self.current = len;
+		return remaining;
 	}
-	self.current = len;
-	return remaining;
 }
 
+macro String new_struct_to_str(x, Allocator allocator = allocator::heap())
+{
+	DString s;
+	@stack_mem(512; Allocator mem)
+	{
+		s.new_init(allocator: mem);
+		io::fprint(&s, x)!!;
+		return s.copy_str(allocator);
+	};
+}
 
+macro String temp_struct_to_str(x) => new_struct_to_str(x, allocator::temp());

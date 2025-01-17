@@ -184,8 +184,6 @@ bool file_namesplit(const char *path, char** filename_ptr, char** directory_ptr)
 	return true;
 }
 
-
-
 const char *file_expand_path(const char *path)
 {
 	if (path[0] == '~' && path[1] == '/')
@@ -242,11 +240,21 @@ char *file_read_all(const char *path, size_t *return_size)
 	{
 		error_exit("Failed to read file \"%s\".\n", path);
 	}
-	assert(bytes_read == file_size);
-
+	ASSERT0(bytes_read == file_size);
 	buffer[bytes_read] = '\0';
-	// Filter '\r' early.
+
 	size_t offset = 0;
+	// Simple UTF16 detection
+	if (buffer[0] == (char)0xFF || buffer[1] == (char)0xFE)
+	{
+		error_exit("The file \"%s\" does not seem to be an UTF8 file, is it perhaps UTF16?\n", path);
+	}
+	// Filter BOM
+	if (buffer[0] == (char)0xEF && buffer[1] == (char)0xBB && buffer[2] == (char)0xBF)
+	{
+		offset += 3;
+	}
+	// Filter '\r' early.
 	for (size_t i = 0; i < file_size - offset; i++)
 	{
 		char c = buffer[i + offset];
@@ -306,11 +314,12 @@ char *file_read_binary(const char *path, size_t *size)
 	}
 	if (file_size > max_read) file_size = max_read;
 	rewind(file);
-	char *buffer = (char *)MALLOC(file_size);
+	char *buffer = (char *)MALLOC(file_size + 1);
 	if (buffer == NULL)
 	{
 		error_exit("Not enough memory to read \"%s\".\n", path);
 	}
+	buffer[file_size] = 0;
 	*size = file_size;
 	bool success = file_read(file, buffer, size);
 	fclose(file);
@@ -363,13 +372,20 @@ const char *find_rel_exe_dir(const char *dir)
 		return scratch_buffer_to_string();
 	}
 	return NULL;
-
-
 }
 
 const char *find_lib_dir(void)
 {
-
+	char *lib_dir_env = getenv("C3C_LIB");
+	if (lib_dir_env && strlen(lib_dir_env) > 0)
+	{
+		INFO_LOG("Using stdlib library from env 'C3C_LIB': %s.", lib_dir_env);
+		if (!file_exists(lib_dir_env))
+		{
+			error_exit("Library path from 'C3C_LIB' environment variable: '%s', could not be resolved.", lib_dir_env);
+		}
+		return strdup(lib_dir_env);
+	}
 	char *path = find_executable_path();
 
 	INFO_LOG("Detected executable path at %s", path);
@@ -411,12 +427,13 @@ void file_find_top_dir()
 	while (1)
 	{
 		struct stat info;
-		int err = stat(PROJECT_JSON, &info);
+		const char *filename = file_exists(PROJECT_JSON5) ? PROJECT_JSON5 : PROJECT_JSON;
+		int err = stat(filename, &info);
 
 		// Error and the it's not a "missing file"?
 		if (err && errno != ENOENT)
 		{
-			error_exit("Can't open %s: %s.", PROJECT_JSON, strerror(errno));
+			error_exit("Can't open %s: %s.", filename, strerror(errno));
 		}
 
 		// Everything worked and it's a regular file? We're done!
@@ -464,12 +481,44 @@ bool file_exists(const char *path)
 	return S_ISDIR(st.st_mode) || S_ISREG(st.st_mode) || S_ISREG(st.st_mode);
 }
 
+#define PATH_BUFFER_SIZE 16384
+static char path_buffer[PATH_BUFFER_SIZE];
+
+const char *file_append_path_temp(const char *path, const char *name)
+{
+	size_t path_len = strlen(path);
+	if (!path_len) return name;
+	size_t name_len = strlen(name);
+	if (path_len + name_len + 1 >= PATH_BUFFER_SIZE) error_exit("Error generating path from %s and %s: buffer max size exceeded.", path, name);
+#if PLATFORM_WINDOWS
+	if (path[path_len - 1] == '\\') goto CONCAT;
+	if (path[path_len - 1] == '/') goto CONCAT;
+	sprintf(path_buffer, "%s\\%s", path, name);
+	path_buffer[name_len + path_len + 1] = 0;
+	return path_buffer;
+#else
+	if (path[path_len - 1] == '/') goto CONCAT;
+	sprintf(path_buffer, "%s/%s", path, name);
+	path_buffer[name_len + path_len + 1] = 0;
+	return path_buffer;
+#endif
+CONCAT:
+	sprintf(path_buffer, "%s%s", path, name);
+	path_buffer[name_len + path_len] = 0;
+	return path_buffer;
+}
 const char *file_append_path(const char *path, const char *name)
 {
 	size_t path_len = strlen(path);
 	if (!path_len) return name;
+#if PLATFORM_WINDOWS
+	if (path[path_len - 1] == '\\') return str_cat(path, name);
+	if (path[path_len - 1] == '/') return str_cat(path, name);
+	return str_printf("%s\\%s", path, name);
+#else
 	if (path[path_len - 1] == '/') return str_cat(path, name);
 	return str_printf("%s/%s", path, name);
+#endif
 }
 
 #ifdef _MSC_VER
@@ -477,9 +526,21 @@ extern int _getdrive(void);
 extern int _chdrive(int drive);
 #endif
 
+void file_copy_file(const char *src_path, const char *dst_path, bool overwrite)
+{
+	ASSERT0(src_path);
+	ASSERT0(dst_path);
+#if (_MSC_VER)
+	CopyFileW(win_utf8to16(src_path), win_utf8to16(dst_path), !overwrite);
+#else
+	const char *cmd = "cp %s %s %s";
+	execute_cmd(str_printf(cmd, !overwrite ? "--update=none" : "--update=all", src_path, dst_path), true, NULL);
+#endif
+}
+
 bool file_delete_file(const char *path)
 {
-	assert(path);
+	ASSERT0(path);
 #if (_MSC_VER)
 	return DeleteFileW(win_utf8to16(path));
 #else
@@ -489,13 +550,13 @@ bool file_delete_file(const char *path)
 
 void file_delete_all_files_in_dir_with_suffix(const char *path, const char *suffix)
 {
-	assert(path);
-#if (_MSC_VER)
+	ASSERT0(path);
+#if (_WIN32)
 	const char *cmd = "del /q \"%s\\*%s\" >nul 2>&1";
 #else
 	const char *cmd = "rm -f %s/*%s";
 #endif
-	execute_cmd(str_printf(cmd, path, suffix), true);
+	execute_cmd(str_printf(cmd, path, suffix), true, NULL);
 }
 
 #if (_MSC_VER)
@@ -580,65 +641,96 @@ void file_add_wildcard_files(const char ***files, const char *path, bool recursi
 
 #endif
 
-#define BUFSIZE 1024
-const char *execute_cmd(const char *cmd, bool ignore_failure)
+const char **target_expand_source_names(const char *base_dir, const char** dirs, const char **suffix_list, const char ***object_list_ref, int suffix_count, bool error_on_mismatch)
 {
-	char buffer[BUFSIZE];
-	char *output = "";
-	FILE *process = NULL;
-#if (_MSC_VER)
-	if (!(process = _wpopen(win_utf8to16(cmd), L"r")))
+	const char **files = NULL;
+	FOREACH(const char *, name, dirs)
 	{
-		if (ignore_failure) return "";
-		error_exit("Failed to open a pipe for command '%s'.", cmd);
+		if (base_dir) name = file_append_path(base_dir, name);
+		INFO_LOG("Searching for sources in %s", name);
+		size_t name_len = strlen(name);
+		if (name_len < 1) goto INVALID_NAME;
+		if (object_list_ref && (str_has_suffix(name, ".o") || str_has_suffix(name, ".obj")))
+		{
+			if (!file_exists(name))
+			{
+				if (!error_on_mismatch) continue;
+				error_exit("The object file '%s' could not be found.", name);
+			}
+			vec_add(*object_list_ref, name);
+			continue;
+		}
+		if (name[name_len - 1] == '*')
+		{
+			if (name_len == 1 || name[name_len - 2] == '/')
+			{
+				char *path = str_copy(name, name_len - 1);
+				file_add_wildcard_files(&files, path, false, suffix_list, suffix_count);
+				continue;
+			}
+			if (name[name_len - 2] != '*') goto INVALID_NAME;
+			INFO_LOG("Searching for wildcard sources in %s", name);
+			if (name_len == 2 || name[name_len - 3] == '/')
+			{
+				const char *path = str_copy(name, name_len - 2);
+				DEBUG_LOG("Reduced path %s", path);
+				file_add_wildcard_files(&files, path, true, suffix_list, suffix_count);
+				continue;
+			}
+			goto INVALID_NAME;
+		}
+		if (!file_has_suffix_in_list(name, name_len, suffix_list, suffix_count)) goto INVALID_NAME;
+		vec_add(files, name);
+		continue;
+		INVALID_NAME:
+		if (file_is_dir(name))
+		{
+			file_add_wildcard_files(&files, name, true, suffix_list, suffix_count);
+			continue;
+		}
+		if (!error_on_mismatch) continue;
+		error_exit("File names must be a non-empty name followed by %s or they cannot be compiled: '%s' is invalid.", suffix_list[0], name);
 	}
-#else
-	if (!(process = popen(cmd, "r")))
-	{
-		if (ignore_failure) return "";
-		error_exit("Failed to open a pipe for command '%s'.", cmd);
-	}
-#endif
-	while (fgets(buffer, BUFSIZE - 1, process))
-	{
-		output = str_cat(output, buffer);
-	}
-#if PLATFORM_WINDOWS
-	int err = _pclose(process);
-#else
-	int err = pclose(process);
-#endif
-	if (err)
+	return files;
+}
+
+
+#define BUFSIZE 1024
+const char *execute_cmd(const char *cmd, bool ignore_failure, const char *stdin_string)
+{
+	const char *result = NULL;
+	bool success = execute_cmd_failable(cmd, &result, stdin_string);
+	if (!success)
 	{
 		if (ignore_failure) return "";
 		error_exit("Failed to execute '%s'.", cmd);
 	}
-
-	while (output[0] != 0)
-	{
-		switch (output[0])
-		{
-			case ' ':
-			case '\t':
-			case '\n':
-			case '\r':
-				output++;
-				continue;
-			default:
-				break;
-		}
-		break;
-	}
-	return str_trim(output);
+	return result;
 }
 
-bool execute_cmd_failable(const char *cmd, const char **result)
+bool execute_cmd_failable(const char *cmd, const char **result, const char *stdin_string)
 {
 	char buffer[BUFSIZE];
 	char *output = "";
 	FILE *process = NULL;
+	FILE *stdin_file = NULL;
+	if (stdin_string)
+	{
+		cmd = strdup(cmd);
+		scratch_buffer_clear();
 #if (_MSC_VER)
-	if (!(process = _wpopen(win_utf8to16(cmd), L"r"))) return false;
+		scratch_buffer_printf("%s < __c3temp.bin", cmd);
+#else
+		scratch_buffer_printf("cat __c3temp.bin | %s", cmd);
+#endif
+		free((char*)cmd);
+		cmd = scratch_buffer_to_string();
+		FILE *f = fopen("__c3temp.bin", "w");
+		fputs(stdin_string, f);
+		fclose(f);
+	}
+#if (_MSC_VER)
+	if (!(process = _wpopen(win_utf8to16(cmd), L"rb"))) return false;
 #else
 	if (!(process = popen(cmd, "r"))) return false;
 #endif
@@ -651,6 +743,10 @@ bool execute_cmd_failable(const char *cmd, const char **result)
 #else
 	int err = pclose(process);
 #endif
+	if (stdin_string)
+	{
+		file_delete_file("__c3temp.bin");
+	}
 	if (err) return false;
 
 	while (output[0] != 0)

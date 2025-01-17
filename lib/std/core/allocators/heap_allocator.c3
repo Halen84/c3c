@@ -11,10 +11,10 @@ struct SimpleHeapAllocator (Allocator)
 	Header* free_list;
 }
 
-/**
- * @require allocator "An underlying memory provider must be given"
- * @require !self.free_list "The allocator may not be already initialized"
- **/
+<*
+ @require allocator "An underlying memory provider must be given"
+ @require !self.free_list "The allocator may not be already initialized"
+*>
 fn void SimpleHeapAllocator.init(&self, MemoryAllocFn allocator)
 {
 	self.alloc_fn = allocator;
@@ -49,9 +49,9 @@ fn void SimpleHeapAllocator.release(&self, void* old_pointer, bool aligned) @dyn
 	}
 }
 
-/**
- * @require old_pointer && bytes > 0
- **/
+<*
+ @require old_pointer && bytes > 0
+*>
 fn void*! SimpleHeapAllocator._realloc(&self, void* old_pointer, usz bytes) @local
 {
 	// Find the block header.
@@ -98,7 +98,7 @@ fn void*! SimpleHeapAllocator._alloc(&self, usz bytes) @local
 				return current + 1;
 			case current.size > aligned_bytes:
 				Header* unallocated = (Header*)((char*)current + aligned_bytes + Header.sizeof);
-				unallocated.size = current.size - aligned_bytes;
+				unallocated.size = current.size - aligned_bytes - Header.sizeof;
 				unallocated.next = current.next;
 				if (current == self.free_list)
 				{

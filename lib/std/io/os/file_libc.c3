@@ -1,10 +1,10 @@
 module std::io::os @if(env::LIBC);
 import libc;
 
-/**
- * @require mode.len > 0
- * @require filename.len > 0
- **/
+<*
+ @require mode.len > 0
+ @require filename.len > 0
+*>
 fn void*! native_fopen(String filename, String mode) @inline
 {
 	@pool()
@@ -41,10 +41,10 @@ fn void! native_remove(String filename)
 	};
 }
 
-/**
- * @require mode.len > 0
- * @require filename.len > 0
- **/
+<*
+ @require mode.len > 0
+ @require filename.len > 0
+*>
 fn void*! native_freopen(void* file, String filename, String mode) @inline
 {
 	@pool()
@@ -60,7 +60,7 @@ fn void*! native_freopen(void* file, String filename, String mode) @inline
 
 fn void! native_fseek(void* file, isz offset, Seek seek_mode) @inline
 {
-	if (libc::fseek(file, (SeekIndex)offset, (CInt)seek_mode)) return file_seek_errno()?;
+	if (libc::fseek(file, (SeekIndex)offset, seek_mode.ordinal)) return file_seek_errno()?;
 }
 
 
@@ -73,6 +73,11 @@ fn usz! native_ftell(CFile file) @inline
 fn usz! native_fwrite(CFile file, char[] buffer) @inline
 {
 	return libc::fwrite(buffer.ptr, 1, buffer.len, file);
+}
+
+fn void! native_fputc(CInt c, CFile stream) @inline
+{
+	if (libc::fputc(c, stream) == libc::EOF) return IoError.EOF?;
 }
 
 fn usz! native_fread(CFile file, char[] buffer) @inline

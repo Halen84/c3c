@@ -50,8 +50,8 @@ fn void test_mat4()
 			-0.988936, -2.970838, -20.765262, 1.000000
 		};
 
-		Matrix4 look_at = vector::matrix4_look_at({4.0, 5.0, 20.0}, {1.0, 3.0, 0.0}, {0.0, 1.0, 0.0});
-		Matrix4f look_at_f = vector::matrix4f_look_at({4.0, 5.0, 20.0}, {1.0, 3.0, 0.0}, {0.0, 1.0, 0.0});
+		Matrix4 look_at = matrix::look_at(<double>)({4.0, 5.0, 20.0}, {1.0, 3.0, 0.0}, {0.0, 1.0, 0.0});
+		Matrix4f look_at_f = matrix::look_at(<float>)({4.0, 5.0, 20.0}, {1.0, 3.0, 0.0}, {0.0, 1.0, 0.0});
 
 		assert(math::round_to_decimals((double[<16>])look_at.m, 4) == math::round_to_decimals((double[<16>])result.m, 4));
 		assert(math::round_to_decimals((float[<16>])look_at_f.m, 4) == math::round_to_decimals((float[<16>])result_f.m, 4));
@@ -104,6 +104,15 @@ fn void test_mat2()
 		Matrix2 value = { 47, 46, 34, 26 };
 
 		assert(calc.m == value.m);
+}
+
+fn void test_mat2_inverse()
+{
+		Matrix2 a = { 3, 5, 6, 2 };
+		Matrix2 a_inv = a.inverse()!!;
+		double sum = ((double[<4>])a_inv.mul(a).m).sum();
+		assert(math::abs(sum - 2.0) < math::FLOAT_EPSILON,
+			"wrong inverse: sum of all elements should be 2, but got: %g", sum);
 }
 
 fn void test_vec3()

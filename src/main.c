@@ -1,17 +1,17 @@
-#include <compiler_tests/benchmark.h>
-#include "compiler/compiler.h"
 #include "build/build.h"
+#include "compiler/compiler.h"
 #include "compiler_tests/tests.h"
 #include "utils/lib.h"
+#include <compiler_tests/benchmark.h>
+
 
 bool debug_log = false;
-bool debug_stats = false;
 
 jmp_buf on_error_jump;
 
 NORETURN void exit_compiler(int exit_value)
 {
-	assert(exit_value != 0);
+	ASSERT0(exit_value != 0);
 	longjmp(on_error_jump, exit_value);
 }
 
@@ -56,7 +56,7 @@ int main_real(int argc, const char *argv[])
 	BuildOptions build_options = parse_arguments(argc, argv);
 
 	// Init the compiler
-	compiler_init(build_options.std_lib_dir);
+	compiler_init(&build_options);
 
 	switch (build_options.command)
 	{
@@ -72,7 +72,6 @@ int main_real(int argc, const char *argv[])
 		case COMMAND_UNIT_TEST:
 			compiler_tests();
 			break;
-		case COMMAND_GENERATE_HEADERS:
 		case COMMAND_COMPILE:
 		case COMMAND_COMPILE_ONLY:
 		case COMMAND_COMPILE_RUN:
@@ -98,6 +97,22 @@ int main_real(int argc, const char *argv[])
 		case COMMAND_TEST:
 			compile_file_list(&build_options);
 			break;
+		case COMMAND_PROJECT:
+			switch (build_options.project_options.command)
+			{
+				case SUBCOMMAND_VIEW:
+					view_project(&build_options);
+					break;
+				case SUBCOMMAND_ADD:
+					add_target_project(&build_options);
+					break;
+				case SUBCOMMAND_FETCH:
+					fetch_project(&build_options);
+					break;
+				case SUBCOMMAND_MISSING:
+					break;
+			}
+			break;
 		case COMMAND_MISSING:
 			UNREACHABLE
 	}
@@ -111,7 +126,7 @@ int main_real(int argc, const char *argv[])
 
 int wmain(int argc, const uint16_t *argv[])
 {
-	char** args = malloc(sizeof(void*) * (unsigned)argc);
+	char **args = malloc(sizeof(void *) * (unsigned)argc);
 	for (unsigned i = 0; i < (unsigned)argc; i++)
 	{
 		args[i] = win_utf16to8(argv[i]);
@@ -121,9 +136,6 @@ int wmain(int argc, const uint16_t *argv[])
 
 #else
 
-int main(int argc, const char *argv[])
-{
-	return main_real(argc, argv);
-}
+int main(int argc, const char *argv[]) { return main_real(argc, argv); }
 
 #endif

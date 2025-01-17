@@ -1,3 +1,6 @@
+<*
+ @require Enum.kindof == TypeKind.ENUM : "Only enums may be used with an enummap"
+*>
 module std::collections::enummap(<Enum, ValueType>);
 import std::io;
 struct EnumMap (Printable)
@@ -19,15 +22,20 @@ fn usz! EnumMap.to_format(&self, Formatter* formatter) @dynamic
 	foreach (i, &value : self.values)
 	{
 		if (i != 0) formatter.print(", ")!;
-		n += formatter.printf("%s: %s", (Enum)i, *value)!;
+		n += formatter.printf("%s: %s", Enum.from_ordinal(i), *value)!;
 	}
 	n += formatter.print(" }")!;
 	return n;
 }
 
-fn String EnumMap.to_new_string(&self, Allocator allocator = allocator::heap()) @dynamic
+fn String EnumMap.to_string(&self, Allocator allocator) @dynamic
 {
-	return string::new_format("%s", *self, .allocator = allocator);
+	return string::format("%s", *self, allocator: allocator);
+}
+
+fn String EnumMap.to_new_string(&self, Allocator allocator = null) @dynamic
+{
+	return string::format("%s", *self, allocator: allocator ?: allocator::heap());
 }
 
 fn String EnumMap.to_tstring(&self) @dynamic
@@ -35,18 +43,18 @@ fn String EnumMap.to_tstring(&self) @dynamic
 	return string::tformat("%s", *self);
 }
 
-/**
- * @return "The total size of this map, which is the same as the number of enum values"
- * @pure
- **/
+<*
+ @return "The total size of this map, which is the same as the number of enum values"
+ @pure
+*>
 fn usz EnumMap.len(&self) @operator(len) @inline
 {
 	return self.values.len;
 }
 
-/**
- * @return "Retrieve a value given the underlying enum, if there is no entry, then the zero value for the value is returned."
- **/
+<*
+ @return "Retrieve a value given the underlying enum, if there is no entry, then the zero value for the value is returned."
+*>
 fn ValueType EnumMap.get(&self, Enum key) @operator([]) @inline
 {
 	return self.values[key.ordinal];

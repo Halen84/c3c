@@ -46,7 +46,7 @@ INLINE bool header_try_gen_both(HeaderContext *c, Type *type)
 	if (header_try_gen_definition(c, type))
 	{
 		bool success = header_try_gen_decl(c, type);
-		assert(success);
+		ASSERT0(success);
 		return true;
 	}
 	return false;
@@ -91,7 +91,7 @@ static void header_print_type(HeaderContext *c, Type *type)
 		PRINTF("%s", decl_get_extname(type->decl));
 		return;
 	}
-	assert(!type_is_optional(type));
+	ASSERT0(!type_is_optional(type));
 	switch (type->type_kind)
 	{
 		case CT_TYPES:
@@ -172,7 +172,7 @@ static void header_print_type(HeaderContext *c, Type *type)
 				PRINTF("%s", decl_get_extname(type->decl));
 				return;
 			}
-			header_print_type(c, type->decl->bitstruct.base_type->type);
+			header_print_type(c, type->decl->strukt.container_type->type);
 			return;
 		case TYPE_ANYFAULT:
 		case TYPE_FAULTTYPE:
@@ -187,15 +187,10 @@ static void header_print_type(HeaderContext *c, Type *type)
 			header_print_type(c, type->decl->distinct->type);
 			return;
 		case TYPE_TYPEDEF:
-			if (!type->decl)
-			{
-				if (type == type_usz) { PRINTF("size_t"); return; }
-				if (type == type_isz) { PRINTF("ptrdiff_t"); return; }
-				if (type == type_iptr) { PRINTF("intptr_t"); return; }
-				if (type == type_uptr) { PRINTF("uintptr_t"); return; }
-				header_print_type(c, type->canonical);
-				return;
-			}
+			if (type == type_usz) { PRINTF("size_t"); return; }
+			if (type == type_isz) { PRINTF("ptrdiff_t"); return; }
+			if (type == type_iptr) { PRINTF("intptr_t"); return; }
+			if (type == type_uptr) { PRINTF("uintptr_t"); return; }
 			if (type->decl->is_export)
 			{
 				PRINTF("%s", decl_get_extname(type->decl));
@@ -280,7 +275,8 @@ static void header_gen_function_ptr(HeaderContext *c, Type *type)
 static void header_gen_function(HeaderContext *c, Decl *decl, bool print_fn, bool* fn_found)
 {
 	if (!decl->is_export) return;
-	if (decl->extname[0] == '_' && decl->extname[1] == '_') return;
+	const char *ext_name = decl_get_extname(decl);
+	if (ext_name[0] == '_' && ext_name[1] == '_') return;
 	if (print_fn && !*fn_found)
 	{
 		*fn_found = true;
@@ -367,7 +363,7 @@ static void header_gen_members(HeaderContext *c, int indent, Decl **members)
 				break;
 			case DECL_BITSTRUCT:
 				INDENT();
-				header_print_type(c, member->bitstruct.base_type->type->canonical);
+				header_print_type(c, member->strukt.container_type->type->canonical);
 				if (member->name)
 				{
 					PRINTF(" %s;\n", member->name);
@@ -502,13 +498,7 @@ RETRY:
 	if (type_is_optional(type)) return;
 	switch (type->type_kind)
 	{
-		case TYPE_POISONED:
-		case TYPE_INFERRED_ARRAY:
-		case TYPE_UNTYPED_LIST:
-		case TYPE_TYPEINFO:
-		case TYPE_MEMBER:
-		case TYPE_INFERRED_VECTOR:
-		case TYPE_WILDCARD:
+		case CT_TYPES:
 		case TYPE_OPTIONAL:
 			UNREACHABLE
 		case TYPE_VOID:
@@ -534,11 +524,6 @@ RETRY:
 		}
 		case TYPE_TYPEDEF:
 		{
-			if (!type->decl)
-			{
-				type = type->canonical;
-				goto RETRY;
-			}
 			if (!header_try_gen_both(c, type)) return;
 			Type *underlying_type = type->canonical;
 			header_gen_maybe_generate_type(c, underlying_type, is_pointer);
@@ -550,7 +535,7 @@ RETRY:
 		case TYPE_BITSTRUCT:
 			{
 				if (!header_try_gen_both(c, type)) return;
-				Type *underlying_type = type->decl->bitstruct.base_type->type;
+				Type *underlying_type = type->decl->strukt.container_type->type;
 				header_gen_maybe_generate_type(c, underlying_type, is_pointer);
 				PRINTF("typedef ");
 				header_print_type(c, underlying_type);
@@ -597,7 +582,7 @@ RETRY:
 
 static void header_gen_global_var(HeaderContext *c, Decl *decl, bool fn_globals, bool *globals_found)
 {
-	assert(decl->decl_kind == DECL_VAR);
+	ASSERT0(decl->decl_kind == DECL_VAR);
 	// Only exports.
 	if (!decl->is_export) return;
 	Type *type = decl->type->canonical;
@@ -617,7 +602,7 @@ static void header_gen_global_var(HeaderContext *c, Decl *decl, bool fn_globals,
 		}
 	}
 	// Flatten bitstructs.
-	if (type->type_kind == TYPE_BITSTRUCT) type = type->decl->bitstruct.base_type->type->canonical;
+	if (type->type_kind == TYPE_BITSTRUCT) type = type->decl->strukt.container_type->type->canonical;
 	// We will lower some consts to defines, if they are:
 	// 1. Not an address
 	// 2. Not user defined (i.e. struct or union)
@@ -629,17 +614,20 @@ static void header_gen_global_var(HeaderContext *c, Decl *decl, bool fn_globals,
 		Type *flat = type_flatten(type);
 		if (type_is_arraylike(flat) || type_is_user_defined(flat) || !init) return;
 		PRINTF("#define %s ", decl_get_extname(decl));
-		assert(expr_is_const(init));
+		ASSERT0(expr_is_const(init));
 		switch (init->const_expr.const_kind)
 		{
 			case CONST_INTEGER:
-				PRINTF("%s\n", int_to_str(init->const_expr.ixx, 10));
+				PRINTF("%s\n", int_to_str(init->const_expr.ixx, 10, false));
 				return;
 			case CONST_FLOAT:
 				PRINTF("%.15g\n", init->const_expr.fxx.f);
 				return;
 			case CONST_BOOL:
 				PRINTF("%s\n", init->const_expr.b ? "true" : "false");
+				return;
+			case CONST_REF:
+				PRINTF("&%s\n", decl_get_extname(init->const_expr.global_ref));
 				return;
 			case CONST_POINTER:
 				if (!init->const_expr.ptr)
@@ -667,6 +655,7 @@ static void header_gen_global_var(HeaderContext *c, Decl *decl, bool fn_globals,
 			case CONST_ERR:
 				PRINTF("%s\n", decl_get_extname(init->const_expr.enum_err_val));
 				return;
+			case CONST_SLICE:
 			case CONST_TYPEID:
 			case CONST_MEMBER:
 			case CONST_INITIALIZER:
@@ -681,7 +670,7 @@ static void header_gen_global_var(HeaderContext *c, Decl *decl, bool fn_globals,
 		return;
 	}
 	header_print_type(c, decl->type);
-	assert(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST);
+	ASSERT0(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST);
 	PRINTF("extern ");
 	if (decl->var.kind == VARDECL_CONST) PRINTF("const ");
 	PRINTF(" %s;\n", decl_get_extname(decl));

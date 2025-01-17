@@ -2,96 +2,80 @@
 // Use of this source code is governed by the GNU LGPLv3.0 license
 // a copy of which can be found in the LICENSE file.
 
-#include "build_internal.h"
 #include "../utils/whereami.h"
+#include "build.h"
+#include "project.h"
+#include "build_internal.h"
+#include "git_hash.h"
 
 extern int llvm_version_major;
+bool silence_deprecation;
 
 static int arg_index;
 static int arg_count;
-static const char** args;
-static const char* current_arg;
-extern const char* llvm_version;
-extern const char* llvm_target;
+static const char **args;
+static const char *current_arg;
+extern const char *llvm_version;
+extern const char *llvm_target;
 
-char *arch_os_target[ARCH_OS_TARGET_LAST + 1] = {
-	[ELF_AARCH64] = "elf-aarch64",
-	[ELF_RISCV32] = "elf-riscv32",
-	[ELF_RISCV64] = "elf-riscv64",
-	[ELF_X86] = "elf-x86",
-	[ELF_X64] = "elf-x64",
-	[ELF_XTENSA] = "elf-xtensa",
-	[FREEBSD_X86] = "freebsd-x86",
-	[FREEBSD_X64] = "freebsd-x64",
-	[LINUX_AARCH64] = "linux-aarch64",
-	[LINUX_RISCV32] = "linux-riscv32",
-	[LINUX_RISCV64] = "linux-riscv64",
-	[LINUX_X86] = "linux-x86",
-	[LINUX_X64] = "linux-x64",
-	[MACOS_AARCH64] = "macos-aarch64",
-	[MACOS_X64] = "macos-x64",
-	[MCU_X86] = "mcu-x86",
-	[MINGW_X64] = "mingw-x64",
-	[NETBSD_X86] = "netbsd-x86",
-	[NETBSD_X64] = "netbsd-x64",
-	[OPENBSD_X86] = "openbsd-x86",
-	[OPENBSD_X64] = "openbsd-x64",
-	[WASM32] = "wasm32",
-	[WASM64] = "wasm64",
-	[WINDOWS_AARCH64] = "windows-aarch64",
-	[WINDOWS_X64] = "windows-x64",
-};
+static const char *check_dir(const char *path);
+static inline bool at_end();
+static inline const char *next_arg();
+static inline bool next_is_opt();
+INLINE bool match_longopt(const char *name);
+static inline const char *match_argopt(const char *name);
+static inline bool match_shortopt(const char *name);
+void append_file(BuildOptions *build_options);
+static inline const char *match_argopt(const char *name);
+void append_arg(BuildOptions *build_options);
+static bool arg_match(const char *candidate);
+static void parse_optional_target(BuildOptions *options);
+static void add_linker_arg(BuildOptions *options, const char *arg);
+static void update_feature_flags(const char ***flags, const char ***removed_flag, const char *arg, bool add);
+static void print_all_targets(void);
+static int parse_multi_option(const char *start, unsigned count, const char **elements);
 
-const char *trust_level[3] = {
-	[TRUST_NONE] = "none",
-	[TRUST_INCLUDE] = "include",
-	[TRUST_FULL] = "full",
-};
+const char *arch_os_target[ARCH_OS_TARGET_LAST + 1];
+const char *trust_level[3];
 
 #define EOUTPUT(string, ...) fprintf(stderr, string "\n", ##__VA_ARGS__) // NOLINT
 #define PRINTF(string, ...) fprintf(stdout, string "\n", ##__VA_ARGS__) // NOLINT
-#define FAIL_WITH_ERR(string, ...) do { fprintf(stderr, "Error: " string "\n\n", ##__VA_ARGS__); usage(); exit_compiler(EXIT_FAILURE); } while (0) /* NOLINT */
+#define FAIL_WITH_ERR(string, ...) do { fprintf(stderr, "Error: " string "\n\n", ##__VA_ARGS__); usage(false); exit_compiler(EXIT_FAILURE); } while (0) /* NOLINT */
+#define PROJECT_FAIL_WITH_ERR(string, ...) do { fprintf(stderr, "Error: " string "\n\n", ##__VA_ARGS__); project_usage(); exit_compiler(EXIT_FAILURE); } while (0) /* NOLINT */
 
-static void usage(void)
+static void usage(bool full)
 {
 	PRINTF("Usage: %s [<options>] <command> [<args>]", args[0]);
 	PRINTF("");
 	PRINTF("Commands:");
 	PRINTF("");
-	PRINTF("  compile <file1> [<file2> ...]           Compile files without a project into an executable.");
-	PRINTF("  init <project name>                     Initialize a new project structure.");
-	PRINTF("  init-lib <library name>                 Initialize a new library structure.");
-	PRINTF("  build [<target>]                        Build the target in the current project.");
-	PRINTF("  benchmark                               Run the benchmarks in the current project.");
-	PRINTF("  test                                    Run the unit tests in the current project.");
-	PRINTF("  clean                                   Clean all build files.");
-	PRINTF("  run [<target>]                          Run (and build if needed) the target in the current project.");
-	PRINTF("  dist [<target>]                         Clean and build a target for distribution.");
-	PRINTF("  directives [<target>]                   Generate documentation for the target.");
-	PRINTF("  bench [<target>]                        Benchmark a target.");
-	PRINTF("  clean-run [<target>]                    Clean, then run the target.");
-	PRINTF("  compile-run <file1> [<file2> ...]       Compile files then immediately run the result.");
-	PRINTF("  compile-only <file1> [<file2> ...]      Compile files but do not perform linking.");
-	PRINTF("  compile-benchmark <file1> [<file2> ...] Compile files into an executable and run benchmarks.");
-	PRINTF("  compile-test <file1> [<file2> ...]      Compile files into an executable and run unit tests.");
-	PRINTF("  static-lib <file1> [<file2> ...]        Compile files without a project into a static library.");
-	PRINTF("  dynamic-lib <file1> [<file2> ...]       Compile files without a project into a dynamic library.");
-	PRINTF("  headers <file1> [<file2> ...]           Analyse files and generate C headers for public methods.");
-	PRINTF("  vendor-fetch <library> ...              Fetches one or more libraries from the vendor collection.");
+	PRINTF("  compile <file1> [<file2> ...]                       Compile files without a project into an executable.");
+	PRINTF("  init <project name>                                 Initialize a new project structure.");
+	PRINTF("  init-lib <library name>                             Initialize a new library structure.");
+	PRINTF("  build [<target>]                                    Build the target in the current project.");
+	PRINTF("  benchmark [-- [<arg1> ...]]                         Run the benchmarks in the current project.");
+	PRINTF("  test [-- [<arg1] ...]                               Run the unit tests in the current project.");
+	PRINTF("  clean                                               Clean all build files.");
+	PRINTF("  run [<target>] [-- [<arg1> ...]]                    Run (and build if needed) the target in the current project.");
+	PRINTF("  dist [<target>]                                     Clean and build a target for distribution.");
+	PRINTF("  directives [<target>]                               Generate documentation for the target.");
+	PRINTF("  bench [<target>]                                    Benchmark a target.");
+	PRINTF("  clean-run [<target>] [-- [<arg1> ...]]              Clean, then run the target.");
+	PRINTF("  compile-run <file1> [<file2> ...] [-- [<arg1> ...]] Compile files then immediately run the result.");
+	PRINTF("  compile-only <file1> [<file2> ...]                  Compile files but do not perform linking.");
+	PRINTF("  compile-benchmark <file1> [<file2> ...]             Compile files into an executable and run benchmarks.");
+	PRINTF("  compile-test <file1> [<file2> ...]                  Compile files into an executable and run unit tests.");
+	PRINTF("  static-lib <file1> [<file2> ...]                    Compile files without a project into a static library.");
+	PRINTF("  dynamic-lib <file1> [<file2> ...]                   Compile files without a project into a dynamic library.");
+	PRINTF("  headers <file1> [<file2> ...]                       Analyse files and generate C headers for public methods.");
+	PRINTF("  vendor-fetch <library> ...                          Fetches one or more libraries from the vendor collection.");
+	PRINTF("  project <subcommand> ...                            Manipulate or view project files.");
 	PRINTF("");
-	PRINTF("Options:");
-	PRINTF("  --tb                       - Use Tilde Backend for compilation.");
-	PRINTF("  --stdlib <dir>             - Use this directory as the C3 standard library path.");
-	PRINTF("  --no-entry                 - Do not generate (or require) a main function.");
-	PRINTF("  --libdir <dir>             - Add this directory to the C3 library search paths.");
-	PRINTF("  --lib <name>               - Add this library to the compilation.");
-	PRINTF("  --path <dir>               - Use this as the base directory for the current command.");
-	PRINTF("  --template <template>      - Select template for 'init': \"exe\", \"static-lib\", \"dynamic-lib\" or a path.");
-	PRINTF("  --about                    - Prints a short description of C3.");
-	PRINTF("  --symtab <value>           - Sets the preferred symtab size.");
-	PRINTF("  --max-mem <value>          - Sets the preferred max memory size.");
-	PRINTF("  --run-once                 - After running the output file, delete it immediately.");
+	full ? PRINTF("Options:") : PRINTF("Common options:");
+	PRINTF("  -h -hh --help              - Print the help, -h for the normal options, -hh for the full help.");
 	PRINTF("  -V --version               - Print version information.");
+	PRINTF("  -q --quiet                 - Silence unnecessary output.");
+	PRINTF("  -v -vv -vvv                - Verbose output, -v for default, -vv and -vvv gives more information.");
 	PRINTF("  -E                         - Lex only.");
 	PRINTF("  -P                         - Only parse and output the AST as JSON.");
 	PRINTF("  -C                         - Only lex, parse and check.");
@@ -107,26 +91,44 @@ static void usage(void)
 	PRINTF("  -Oz                        - Unsafe, high optimization, tiny code, single module, no debug info, no panic messages, no backtrace.");
 	PRINTF("  -D <name>                  - Add feature flag <name>.");
 	PRINTF("  -U <name>                  - Remove feature flag <name>.");
-	PRINTF("  --trust=<option>           - Trust level: none (default), include ($include allowed), full ($exec / exec allowed).");
-	PRINTF("  --output-dir <dir>         - Override general output directory.");
-	PRINTF("  --build-dir <dir>          - Override build output directory.");
-	PRINTF("  --obj-out <dir>            - Override object file output directory.");
-	PRINTF("  --script-dir <dir>         - Override the base directory for $exec.");
-	PRINTF("  --llvm-out <dir>           - Override llvm output directory for '--emit-llvm'.");
-	PRINTF("  --emit-llvm                - Emit LLVM IR as a .ll file per module.");
-	PRINTF("  --asm-out <dir>            - Override asm output directory for '--emit-asm'.");
-	PRINTF("  --emit-asm                 - Emit asm as a .s file per module.");
-	PRINTF("  --obj                      - Emit object files. (Enabled by default)");
-	PRINTF("  --no-obj                   - Do not output object files, this is only valid for `compile-only`.");
-	PRINTF("  --no-headers               - Do not generate C headers when building a library.");
-	PRINTF("  --target <target>          - Compile for a particular architecture + OS target.");
-	PRINTF("  --threads <number>         - Set the number of threads to use for compilation.");
-	PRINTF("  --safe=<yes|no>            - Turn safety (contracts, runtime bounds checking, null pointer checks etc) on or off.");
-	PRINTF("  --panic-msg=<yes|no>       - Turn panic message output on or off.");
-	PRINTF("  --optlevel=<option>        - Code optimization level: none, less, more, max.");
-	PRINTF("  --optsize=<option>         - Code size optimization: none, small, tiny.");
-	PRINTF("  --single-module=<yes|no>   - Compile all modules together, enables more inlining.");
-	PRINTF("  --show-backtrace=<yes|no>  - Show detailed backtrace on segfaults.");
+	PRINTF("");
+	PRINTF("  --about                    - Prints a short description of C3.");
+	PRINTF("  --libdir <dir>             - Add this directory to the c3l library search paths.");
+	PRINTF("  --lib <name>               - Add this c3l library to the compilation.");
+	if (full)
+	{
+		PRINTF("  --validation=<option>      - Strictness of code validation: lenient (default), strict, obnoxious (very strict)");
+		PRINTF("  --stdlib <dir>             - Use this directory as the C3 standard library path.");
+		PRINTF("  --no-entry                 - Do not generate (or require) a main function.");
+		PRINTF("  --path <dir>               - Use this as the base directory for the current command.");
+		PRINTF("  --template <template>      - Select template for 'init': \"exe\", \"static-lib\", \"dynamic-lib\" or a path.");
+		PRINTF("  --symtab <value>           - Sets the preferred symtab size.");
+		PRINTF("  --max-mem <value>          - Sets the preferred max memory size.");
+		PRINTF("  --run-once                 - After running the output file, delete it immediately.");
+		PRINTF("  --trust=<option>           - Trust level: none (default), include ($include allowed), full ($exec / exec allowed).");
+		PRINTF("  --output-dir <dir>         - Override general output directory.");
+		PRINTF("  --build-dir <dir>          - Override build output directory.");
+		PRINTF("  --obj-out <dir>            - Override object file output directory.");
+		PRINTF("  --script-dir <dir>         - Override the base directory for $exec.");
+		PRINTF("  --llvm-out <dir>           - Override llvm output directory for '--emit-llvm'.");
+		PRINTF("  --emit-llvm                - Emit LLVM IR as a .ll file per module.");
+		PRINTF("  --asm-out <dir>            - Override asm output directory for '--emit-asm'.");
+		PRINTF("  --emit-asm                 - Emit asm as a .s file per module.");
+		PRINTF("  --obj                      - Emit object files. (Enabled by default)");
+		PRINTF("  --no-obj                   - Do not output object files, this is only valid for `compile-only`.");
+		PRINTF("  --no-headers               - Do not generate C headers when building a library.");
+		PRINTF("  --target <target>          - Compile for a particular architecture + OS target.");
+		PRINTF("  --threads <number>         - Set the number of threads to use for compilation.");
+		PRINTF("  --safe=<yes|no>            - Turn safety (contracts, runtime bounds checking, null pointer checks etc) on or off.");
+		PRINTF("  --panic-msg=<yes|no>       - Turn panic message output on or off.");
+		PRINTF("  --optlevel=<option>        - Code optimization level: none, less, more, max.");
+		PRINTF("  --optsize=<option>         - Code size optimization: none, small, tiny.");
+		PRINTF("  --single-module=<yes|no>   - Compile all modules together, enables more inlining.");
+		PRINTF("  --show-backtrace=<yes|no>  - Show detailed backtrace on segfaults.");
+		PRINTF("  --lsp                      - Emit data about errors suitable for a LSP.");
+		PRINTF("  --old-test-bench=<yes|no>  - Allow benchmarks and tests to use the deprecated 'void!' returns.");
+
+	}
 	PRINTF("");
 	PRINTF("  -g                         - Emit debug info.");
 	PRINTF("  -g0                        - Emit no debug info.");
@@ -134,137 +136,122 @@ static void usage(void)
 	PRINTF("  -l <library>               - Link with the library provided.");
 	PRINTF("  -L <library dir>           - Append the directory to the linker search paths.");
 	PRINTF("  -z <argument>              - Send the <argument> as a parameter to the linker.");
-	PRINTF("  --cc <path>                - Set C compiler (for C files in projects and use as system linker).");
-	PRINTF("  --linker=<option> [<path>] - Linker: builtin, cc, custom (default is 'cc'), 'custom' requires a path.");
-	PRINTF("");
-	PRINTF("  --use-stdlib=<yes|no>      - Include the standard library (default: yes).");
-	PRINTF("  --link-libc=<yes|no>       - Link libc other default libraries (default: yes).");
-	PRINTF("  --emit-stdlib=<yes|no>     - Output files for the standard library. (default: yes)");
-	PRINTF("  --panicfn <name>           - Override the panic function name.");
-	PRINTF("  --testfn <name>            - Override the test runner function name.");
-	PRINTF("  --benchfn <name>           - Override the benchmark runner function name.");
-	PRINTF("");
-	PRINTF("  --reloc=<option>           - Relocation model: none, pic, PIC, pie, PIE.");
-	PRINTF("  --x86cpu=<option>          - Set general level of x64 cpu: baseline, ssse3, sse4, avx1, avx2-v1, avx2-v2 (Skylake/Zen1+), avx512 (Icelake/Zen4+), native.");
-	PRINTF("  --x86vec=<option>          - Set max type of vector use: none, mmx, sse, avx, avx512, default.");
-	PRINTF("  --riscvfloat=<option>      - Set type of RISC-V float support: none, float, double");
-	PRINTF("  --memory-env=<option>      - Set the memory environment: normal, small, tiny, none.");
-	PRINTF("  --strip-unused=<yes|no>    - Strip unused code and globals from the output. (default: yes)");
-	PRINTF("  --fp-math=<option>         - FP math behaviour: strict, relaxed, fast.");
-	PRINTF("  --win64-simd=<option>      - Win64 SIMD ABI: array, full.");
-	PRINTF("");
-	PRINTF("  --debug-stats              - Print debug statistics.");
-	PRINTF("  --print-linking            - Print linker arguments.");
-#ifndef NDEBUG
-	PRINTF("  --debug-log                - Print debug logging to stdout.");
-#endif
-	PRINTF("");
-	PRINTF("  --benchmarking             - Run built-in benchmarks.");
-	PRINTF("  --testing                  - Run built-in tests.");
-	PRINTF("");
-	PRINTF("  --list-attributes          - List all attributes.");
-	PRINTF("  --list-builtins            - List all builtins.");
-	PRINTF("  --list-keywords            - List all keywords.");
-	PRINTF("  --list-operators           - List all operators.");
-	PRINTF("  --list-precedence          - List operator precedence order.");
-	PRINTF("  --list-project-properties  - List all available keys used in project.json files.");
-	PRINTF("  --list-manifest-properties - List all available keys used in manifest.json files.");
-	PRINTF("  --list-targets             - List all architectures the compiler supports.");
-	PRINTF("  --list-type-properties     - List all type properties.");
-	PRINTF("");
-	PRINTF("  --print-output             - Print the object files created to stdout.");
-	PRINTF("  --print-input              - Print inputted C3 files to stdout.");
-	PRINTF("");
-	PRINTF("  --winsdk <dir>             - Set the directory for Windows system library files for cross compilation.");
-	PRINTF("  --wincrt=<option>          - Windows CRT linking: none, static, dynamic (default).");
-	PRINTF("  --windef <file>            - Use Windows 'def' file for function exports instead of 'dllexport'.");
-	PRINTF("");
-	PRINTF("  --macossdk <dir>           - Set the directory for the MacOS SDK for cross compilation.");
-	PRINTF("  --macos-min-version <ver>  - Set the minimum MacOS version to compile for.");
-	PRINTF("  --macos-sdk-version <ver>  - Set the MacOS SDK compiled for.");
-	PRINTF("");
-	PRINTF("  --linux-crt <dir>          - Set the directory to use for finding crt1.o and related files.");
-	PRINTF("  --linux-crtbegin <dir>     - Set the directory to use for finding crtbegin.o and related files.");
-	PRINTF("");
-	PRINTF("  --vector-conv=<option>     - Set vector conversion behaviour: default, old.");
-}
-
-
-
-static const char* check_dir(const char *path)
-{
-	static char *original_path = NULL;
-	if (!original_path)
+	if (full)
 	{
-		original_path = getcwd(NULL, 0);
+		PRINTF("  --cc <path>                - Set C compiler (for C files in projects and use as system linker).");
+		PRINTF("  --linker=<option> [<path>] - Linker: builtin, cc, custom (default is 'cc'), 'custom' requires a path.");
+		PRINTF("");
+		PRINTF("  --use-stdlib=<yes|no>      - Include the standard library (default: yes).");
+		PRINTF("  --link-libc=<yes|no>       - Link libc other default libraries (default: yes).");
+		PRINTF("  --emit-stdlib=<yes|no>     - Output files for the standard library. (default: yes)");
+		PRINTF("  --panicfn <name>           - Override the panic function name.");
+		PRINTF("  --testfn <name>            - Override the test runner function name.");
+		PRINTF("  --benchfn <name>           - Override the benchmark runner function name.");
+		PRINTF("");
+		PRINTF("  --reloc=<option>           - Relocation model: none, pic, PIC, pie, PIE.");
+		PRINTF("  --x86cpu=<option>          - Set general level of x64 cpu: baseline, ssse3, sse4, avx1, avx2-v1, avx2-v2 (Skylake/Zen1+), avx512 (Icelake/Zen4+), native.");
+		PRINTF("  --x86vec=<option>          - Set max type of vector use: none, mmx, sse, avx, avx512, default.");
+		PRINTF("  --riscvfloat=<option>      - Set type of RISC-V float support: none, float, double");
+		PRINTF("  --memory-env=<option>      - Set the memory environment: normal, small, tiny, none.");
+		PRINTF("  --strip-unused=<yes|no>    - Strip unused code and globals from the output. (default: yes)");
+		PRINTF("  --fp-math=<option>         - FP math behaviour: strict, relaxed, fast.");
+		PRINTF("  --win64-simd=<option>      - Win64 SIMD ABI: array, full.");
+		PRINTF("");
+		PRINTF("  --print-linking            - Print linker arguments.");
+		PRINTF("");
+		PRINTF("  --benchmarking             - Run built-in benchmarks.");
+		PRINTF("  --testing                  - Run built-in tests.");
+		PRINTF("");
+		PRINTF("  --list-attributes          - List all attributes.");
+		PRINTF("  --list-builtins            - List all builtins.");
+		PRINTF("  --list-keywords            - List all keywords.");
+		PRINTF("  --list-operators           - List all operators.");
+		PRINTF("  --list-precedence          - List operator precedence order.");
+		PRINTF("  --list-project-properties  - List all available keys used in project.json files.");
+		PRINTF("  --list-manifest-properties - List all available keys used in manifest.json files.");
+		PRINTF("  --list-targets             - List all architectures the compiler supports.");
+		PRINTF("  --list-type-properties     - List all type properties.");
+		PRINTF("");
+		PRINTF("  --print-output             - Print the object files created to stdout.");
+		PRINTF("  --print-input              - Print inputted C3 files to stdout.");
+		PRINTF("");
+		PRINTF("  --winsdk <dir>             - Set the directory for Windows system library files for cross compilation.");
+		PRINTF("  --wincrt=<option>          - Windows CRT linking: none, static-debug, static, dynamic-debug (default if debug info enabled), dynamic (default).");
+		PRINTF("  --windef <file>            - Use Windows 'def' file for function exports instead of 'dllexport'.");
+		PRINTF("  --win-vs-dirs <dir>;<dir>  - Override Windows VS detection.");
+		PRINTF("");
+		PRINTF("  --macossdk <dir>           - Set the directory for the MacOS SDK for cross compilation.");
+		PRINTF("  --macos-min-version <ver>  - Set the minimum MacOS version to compile for.");
+		PRINTF("  --macos-sdk-version <ver>  - Set the MacOS SDK compiled for.");
+		PRINTF("");
+		PRINTF("  --linux-crt <dir>          - Set the directory to use for finding crt1.o and related files.");
+		PRINTF("  --linux-crtbegin <dir>     - Set the directory to use for finding crtbegin.o and related files.");
+		PRINTF("");
+		PRINTF("  --vector-conv=<option>     - Set vector conversion behaviour: default, old.");
+		PRINTF("  --sanitize=<option>        - Enable sanitizer: address, memory, thread.");
 	}
-	if (!dir_change(path)) error_exit("The path \"%s\" does not point to a valid directory.", path);
-	if (!dir_change(original_path)) FAIL_WITH_ERR("Failed to change path to %s.", original_path);
-	return path;
-}
-
-static inline bool at_end()
-{
-	return arg_index == arg_count - 1;
-}
-
-static inline const char* next_arg()
-{
-	assert(!at_end());
-	current_arg = args[++arg_index];
-	return current_arg;
-}
-
-
-static inline bool next_is_opt()
-{
-	return args[arg_index + 1][0] == '-';
-}
-
-INLINE bool match_longopt(const char* name)
-{
-	return str_eq(&current_arg[2], name);
-}
-
-static inline const char *match_argopt(const char* name)
-{
-	size_t len = strlen(name);
-	if (memcmp(&current_arg[2], name, len) != 0) return false;
-	if (current_arg[2 + len] != '=') return false;
-	return &current_arg[2 + len + 1];
-}
-
-static inline bool match_shortopt(const char* name)
-{
-	return strcmp(&current_arg[1], name) == 0;
-}
-
-
-void append_file(BuildOptions *build_options)
-{
-	if (vec_size(build_options->files) == MAX_FILES)
+	if (!full)
 	{
-		EOUTPUT("Max %d files may be specified.", MAX_FILES);
-		exit_compiler(EXIT_FAILURE);
+		PRINTF("");
+		PRINTF("Use -hh to view the full list of options.");
 	}
-	vec_add(build_options->files, current_arg);
 }
 
-static bool arg_match(const char *candidate)
+static void project_usage()
 {
-	return strcmp(current_arg, candidate) == 0;
+	PRINTF("Usage: %s [<options>] project <subcommand> [<args>]", args[0]);
+	PRINTF("");
+	PRINTF("Project Subcommands:");
+	PRINTF("  view                                            view the current projects structure");
+	PRINTF("  add-target <name>  <target_type>  [sources...]  add a new target to the project");
+	#if FETCH_AVAILABLE
+		PRINTF("  fetch                                           fetch missing project libraries");
+	#endif
 }
 
-static void parse_optional_target(BuildOptions *options)
+static void parse_project_subcommand(BuildOptions *options)
 {
-	if (at_end() || next_is_opt())
+	if (arg_match("view"))
 	{
-		options->target_select = NULL;
+		options->project_options.command = SUBCOMMAND_VIEW;
+		return;
 	}
-	else
+	if (arg_match("add-target"))
 	{
-		options->target_select = next_arg();
+		options->project_options.command = SUBCOMMAND_ADD;
+
+		if (at_end() || next_is_opt()) error_exit("Expected a target name");
+		options->project_options.target_name = next_arg();
+
+		if (at_end() || next_is_opt()) error_exit("Expected a target type like 'executable' or 'static-lib'");
+		options->project_options.target_type = (TargetType)get_valid_enum_from_string(next_arg(), "type", targets, ELEMENTLEN(targets), "a target type like 'executable' or 'static-lib'");
+
+		while (!at_end() && !next_is_opt())
+		{
+			vec_add(options->project_options.sources, next_arg());
+		}
+
+		return;
 	}
+	if (arg_match("fetch"))
+	{
+		options->project_options.command = SUBCOMMAND_FETCH;
+		return;
+	}
+
+	PROJECT_FAIL_WITH_ERR("Cannot process the unknown subcommand \"%s\".", current_arg);
+}
+
+static void parse_project_options(BuildOptions *options)
+{
+	options->project_options.command = SUBCOMMAND_MISSING;
+	if (at_end())
+	{
+		project_usage();
+		return;
+	}
+	next_arg();
+	parse_project_subcommand(options);
 }
 
 static void parse_command(BuildOptions *options)
@@ -310,11 +297,6 @@ static void parse_command(BuildOptions *options)
 		options->command = COMMAND_COMPILE_ONLY;
 		return;
 	}
-	if (arg_match("headers"))
-	{
-		options->command = COMMAND_GENERATE_HEADERS;
-		return;
-	}
 	if (arg_match("static-lib"))
 	{
 		options->command = COMMAND_STATIC_LIB;
@@ -352,6 +334,7 @@ static void parse_command(BuildOptions *options)
 	{
 		options->command = COMMAND_TEST;
 		options->testing = true;
+		parse_optional_target(options);
 		return;
 	}
 	if (arg_match("run"))
@@ -394,76 +377,43 @@ static void parse_command(BuildOptions *options)
 		parse_optional_target(options);
 		return;
 	}
+	if (arg_match("project"))
+	{
+		options->command = COMMAND_PROJECT;
+		parse_project_options(options);
+		return;
+	}
 	FAIL_WITH_ERR("Cannot process the unknown command \"%s\".", current_arg);
 }
-static void print_all_targets(void)
-{
-	PRINTF("Available targets:");
-	for (unsigned i = 1; i <= ARCH_OS_TARGET_LAST; i++)
-	{
-		PRINTF("   %s", arch_os_target[i]);
-	}
-}
+
 
 static void print_version(void)
 {
-	PRINTF("C3 Compiler Version:       %s%s", COMPILER_VERSION, PRERELEASE ? " (prerelease)" : "");
+	static const char *BUILD_DATE = __DATE__;
+	static const char *BUILD_TIME = __TIME__;
+#if	PRERELEASE
+	PRINTF("C3 Compiler Version:       %s (Pre-release, %s %s)", COMPILER_VERSION, BUILD_DATE, BUILD_TIME);
+#else
+	PRINTF("C3 Compiler Version:       %s", COMPILER_VERSION);
+#endif
 	PRINTF("Installed directory:       %s", find_executable_path());
+	PRINTF("Git Hash:                  %s", GIT_HASH);
+
+#if LLVM_AVAILABLE && TB_AVAILABLE
+    PRINTF("Backends:                  LLVM; TB");
+#elif LLVM_AVAILABLE
+    PRINTF("Backends:                  LLVM");
+#elif TB_AVAILABLE
+    PRINTF("Backends:                  TB");
+#else
+
+    PRINTF("No backends available");
+#endif
+
+#if LLVM_AVAILABLE
 	PRINTF("LLVM version:              %s", llvm_version);
 	PRINTF("LLVM default target:       %s", llvm_target);
-}
-
-static void add_linker_arg(BuildOptions *options, const char *arg)
-{
-	if (options->linker_arg_count == MAX_LIB_DIRS)
-	{
-		error_exit("Too many linker arguments are given, more than %d\n", MAX_LIB_DIRS);
-	}
-	options->linker_args[options->linker_arg_count++] = arg;
-}
-
-/**
- * Update feature flags, adding to one list and removing it from the other.
- * @param flags the "add" flags
- * @param removed_flags the "undef" flags
- * @param arg the argument to add or undef
- * @param add true if we add, false to undef
- */
-void update_feature_flags(const char ***flags, const char ***removed_flags, const char *arg, bool add)
-{
-	// We keep two lists "remove" and "add" lists:
-	const char ***to_remove_from = add ? removed_flags : flags;
-
-	// Remove from opposite list using string equality
-	// More elegant would be using a Set or Map, but that's overkill
-	// for something that's likely just 1-2 values.
-	FOREACH_IDX(i, const char *, value, *to_remove_from)
-	{
-		if (str_eq(value, arg))
-		{
-			vec_erase_ptr_at(*to_remove_from, i);
-			break;
-		}
-	}
-
-	// First we check that it's not in the list
-	const char ***to_add_to_ref = add ? flags : removed_flags;
-	FOREACH(const char *, value, *to_add_to_ref)
-	{
-		// If we have a match, we don't add it.
-		if (str_eq(value, arg)) return;
-	}
-
-	// No match, so add it.
-	vec_add(*to_add_to_ref, arg);
-}
-
-static int parse_multi_option(const char *start, unsigned count, const char** elements)
-{
-	const char *arg = current_arg;
-	int select = str_findlist(start, count, elements);
-	if (select < 0) error_exit("error: %.*s invalid option '%s' given.", (int)(start - arg), start, arg);
-	return select;
+#endif
 }
 
 static void parse_option(BuildOptions *options)
@@ -474,11 +424,40 @@ static void parse_option(BuildOptions *options)
 		case '\0':
 			options->read_stdin = true;
 			return;
-		case '?':
-			if (match_shortopt("?"))
+		case 'h':
+			if (match_shortopt("hh"))
 			{
-				usage();
+				usage(true);
 				exit_compiler(COMPILER_SUCCESS_EXIT);
+			}
+			if (match_shortopt("h"))
+			{
+				usage(false);
+				exit_compiler(COMPILER_SUCCESS_EXIT);
+			}
+			break;
+		case 'q':
+			if (match_shortopt("q"))
+			{
+				options->verbosity_level = -1;
+				return;
+			}
+			break;
+		case 'v':
+			if (match_shortopt("vvv"))
+			{
+				options->verbosity_level = 3;
+				return;
+			}
+			if (match_shortopt("vv"))
+			{
+				options->verbosity_level = 2;
+				return;
+			}
+			if (match_shortopt("v"))
+			{
+				options->verbosity_level = 1;
+				return;
 			}
 			break;
 		case 'V':
@@ -505,8 +484,6 @@ static void parse_option(BuildOptions *options)
 				return;
 			}
 			FAIL_WITH_ERR("Unknown debug argument -%s.", &current_arg[1]);
-		case 'h':
-			break;
 		case 'z':
 			if (match_shortopt("z"))
 			{
@@ -648,9 +625,9 @@ static void parse_option(BuildOptions *options)
 			}
 			break;
 		case '-':
-			if (match_longopt("tb"))
+			if ((argopt = match_argopt("validation")))
 			{
-				options->backend = BACKEND_TB;
+				options->validation_level = (ValidationLevel)parse_multi_option(argopt, 3, validation_levels);
 				return;
 			}
 			if (match_longopt("max-mem"))
@@ -659,6 +636,12 @@ static void parse_option(BuildOptions *options)
 				const char *maxmem_string = next_arg();
 				int maxmem = atoi(maxmem_string);
 				if (maxmem < 128) PRINTF("Expected a valid positive integer >= 128.");
+				return;
+			}
+			if (match_longopt("silence-deprecation"))
+			{
+				options->silence_deprecation = true;
+				silence_deprecation = true;
 				return;
 			}
 			if (match_longopt("symtab"))
@@ -670,13 +653,25 @@ static void parse_option(BuildOptions *options)
 				options->symtab_size = next_highest_power_of_2(symtab);
 				return;
 			}
+			if (match_longopt("quiet"))
+			{
+				options->verbosity_level = -1;
+				return;
+			}
 			if (match_longopt("version"))
 			{
 				print_version();
 				exit_compiler(COMPILER_SUCCESS_EXIT);
 			}
-			if (match_longopt("run-once")) {
+			if ((argopt = match_argopt("backend")))
+			{
+				options->backend = (CompilerBackend)parse_multi_option(argopt, 3, backends);
+				return;
+			}
+			if (match_longopt("run-once"))
+			{
 				options->run_once = true;
+				if (!options->verbosity_level) options->verbosity_level = -1;
 				return;
 			}
 			if ((argopt = match_argopt("fp-math")))
@@ -697,6 +692,11 @@ static void parse_option(BuildOptions *options)
 			if ((argopt = match_argopt("safe")))
 			{
 				options->safety_level = (SafetyLevel)parse_multi_option(argopt, 2, on_off);
+				return;
+			}
+			if ((argopt = match_argopt("old-test-bench")))
+			{
+				options->old_test = (OldTest) parse_multi_option(argopt, 2, on_off);
 				return;
 			}
 			if ((argopt = match_argopt("show-backtrace")))
@@ -794,17 +794,6 @@ static void parse_option(BuildOptions *options)
 			if (match_longopt("no-headers"))
 			{
 				options->no_headers = true;
-				return;
-			}
-			if (match_longopt("debug-log"))
-			{
-				debug_log = true;
-				debug_stats = true;
-				return;
-			}
-			if (match_longopt("debug-stats"))
-			{
-				debug_stats = true;
 				return;
 			}
 			if (match_longopt("print-linking"))
@@ -911,7 +900,7 @@ static void parse_option(BuildOptions *options)
 			}
 			if (match_longopt("print-input"))
 			{
-				options->print_input = true; 
+				options->print_input = true;
 				return;
 			}
 			if (match_longopt("no-entry"))
@@ -958,6 +947,10 @@ static void parse_option(BuildOptions *options)
 			}
 			if (match_longopt("winsdk"))
 			{
+				if (options->win.vs_dirs)
+				{
+					error_exit("error: --winsdk cannot be combined with --win-vs-dirs.");
+				}
 				if (at_end() || next_is_opt()) error_exit("error: --winsdk needs a directory.");
 				options->win.sdk = check_dir(next_arg());
 				return;
@@ -980,7 +973,22 @@ static void parse_option(BuildOptions *options)
 			}
 			if ((argopt = match_argopt("wincrt")))
 			{
-				options->win.crt_linking = (WinCrtLinking)parse_multi_option(argopt, 3, wincrt_linking);
+				options->win.crt_linking = (WinCrtLinking)parse_multi_option(argopt, 5, wincrt_linking);
+				return;
+			}
+			if (match_longopt("win-vs-dirs"))
+			{
+				if (options->win.sdk)
+				{
+					error_exit("error: --win-vs-dirs cannot be combined with --winsdk.");
+				}
+				if (at_end() || next_is_opt()) error_exit("error: --win-vs-dirs needs to followed by the directories.");
+				options->win.vs_dirs = next_arg();
+				return;
+			}
+			if ((argopt = match_argopt("sanitize")))
+			{
+				options->sanitize_mode = (SanitizeMode)parse_multi_option(argopt, 4, sanitize_modes);
 				return;
 			}
 			if (match_longopt("macos-sdk-version"))
@@ -1040,23 +1048,24 @@ static void parse_option(BuildOptions *options)
 					if (str_has_suffix(name, ".c3l"))
 					{
 						error_exit("When specifying libraries, the .c3l suffix should"
-								   " not be included, so rather than '--lib %s', try using '--lib %s' instead.",
-								   name, str_remove_suffix(name, ".c3l"));
+						           " not be included, so rather than '--lib %s', try using '--lib %s' instead.",
+						           name, str_remove_suffix(name, ".c3l"));
 					}
 					if (str_has_suffix(name, ".lib") || str_has_suffix(name, ".a")
-						|| str_has_suffix(name, ".dll") || str_has_suffix(name, ".so"))
+					    || str_has_suffix(name, ".dll") || str_has_suffix(name, ".so"))
 					{
 						error_exit("You tried to add '%s' as a C3 library, but from the name it appears to be a"
-								   " static/dynamic library. To link with such a library, use '-l <name>' instead.",
-								   name);
+						           " static/dynamic library. To link with such a library, use '-l <name>' instead.",
+						           name);
 					}
 					char *name_copy = strdup(name);
 					str_ellide_in_place(name_copy, 32);
 					if (strchr(name, '/') != NULL || (PLATFORM_WINDOWS && strchr(name, '\\') != NULL))
 					{
-						error_exit("There is a problem including the library '%s': a library name should never contain the path. Use '--libdir' to add the "
-						           "directory to the library search paths, then use the plain name for '--lib', "
-						           "e.g '--libdir my_project/libs --lib some_lib'.", name_copy);
+						error_exit(
+								"There is a problem including the library '%s': a library name should never contain the path. Use '--libdir' to add the "
+								"directory to the library search paths, then use the plain name for '--lib', "
+								"e.g '--libdir my_project/libs --lib some_lib'.", name_copy);
 					}
 					error_exit("Invalid library name '%s', it should be something like 'foo_lib'.", name_copy);
 				}
@@ -1066,7 +1075,7 @@ static void parse_option(BuildOptions *options)
 			if (match_longopt("libdir"))
 			{
 				if (at_end() || next_is_opt()) error_exit("error: --libdir needs a directory.");
-				if (options->lib_dir_count == MAX_LIB_DIRS) error_exit("Max %d library directories may be specified.", MAX_LIB_DIRS);
+				if (options->lib_dir_count == MAX_BUILD_LIB_DIRS) error_exit("Max %d library directories may be specified.", MAX_BUILD_LIB_DIRS);
 				options->lib_dir[options->lib_dir_count++] = check_dir(next_arg());
 				return;
 			}
@@ -1075,8 +1084,16 @@ static void parse_option(BuildOptions *options)
 				options->benchmark_mode = true;
 				return;
 			}
+			if (match_longopt("lsp"))
+			{
+				options->lsp_mode = true;
+				options->strip_unused = STRIP_UNUSED_OFF;
+				options->test_mode = false;
+				return;
+			}
 			if (match_longopt("test"))
 			{
+				options->lsp_mode = false;
 				options->test_mode = true;
 				options->strip_unused = STRIP_UNUSED_OFF;
 				return;
@@ -1117,7 +1134,7 @@ static void parse_option(BuildOptions *options)
 			}
 			if (match_longopt("help"))
 			{
-				usage();
+				usage(true);
 				exit_compiler(COMPILER_SUCCESS_EXIT);
 			}
 			break;
@@ -1128,7 +1145,6 @@ static void parse_option(BuildOptions *options)
 	FAIL_WITH_ERR("Cannot process the unknown option \"%s\".", current_arg);
 }
 
-
 BuildOptions parse_arguments(int argc, const char *argv[])
 {
 	arg_count = argc;
@@ -1136,17 +1152,20 @@ BuildOptions parse_arguments(int argc, const char *argv[])
 
 	if (argc < 2)
 	{
-		usage();
+		usage(false);
 		exit_compiler(COMPILER_SUCCESS_EXIT);
 	}
 
 	BuildOptions build_options = {
-		.path = ".",
+		.path = DEFAULT_PATH,
+		.vendor_download_path = DEFAULT_PATH,
 		.emit_llvm = false,
 		.optsetting = OPT_SETTING_NOT_SET,
 		.debug_info_override = DEBUG_INFO_NOT_SET,
 		.safety_level = SAFETY_NOT_SET,
 		.panic_level = PANIC_NOT_SET,
+		.show_backtrace = SHOW_BACKTRACE_NOT_SET,
+		.old_test = OLD_TEST_NOT_SET,
 		.optlevel = OPTIMIZATION_NOT_SET,
 		.optsize = SIZE_OPTIMIZATION_NOT_SET,
 		.build_threads = cpus(),
@@ -1164,8 +1183,10 @@ BuildOptions parse_arguments(int argc, const char *argv[])
 		.link_libc = LINK_LIBC_NOT_SET,
 		.use_stdlib = USE_STDLIB_NOT_SET,
 		.linker_type = LINKER_TYPE_NOT_SET,
+		.validation_level = VALIDATION_NOT_SET,
 		.strip_unused = STRIP_UNUSED_NOT_SET,
 		.single_module = SINGLE_MODULE_NOT_SET,
+		.sanitize_mode = SANITIZE_NOT_SET,
 		.unroll_loops = UNROLL_LOOPS_NOT_SET,
 		.merge_functions = MERGE_FUNCTIONS_NOT_SET,
 		.slp_vectorization = VECTORIZATION_NOT_SET,
@@ -1174,7 +1195,6 @@ BuildOptions parse_arguments(int argc, const char *argv[])
 		.build_dir = NULL,
 		.output_dir = NULL,
 		.script_dir = NULL,
-
 	};
 	for (int i = DIAG_NONE; i < DIAG_WARNING_TYPE; i++)
 	{
@@ -1189,9 +1209,20 @@ BuildOptions parse_arguments(int argc, const char *argv[])
 		build_options.severity[i] = DIAG_ERROR;
 	}
 
+	bool collecting_args = false;
 	for (arg_index = 1; arg_index < arg_count; arg_index++)
 	{
 		current_arg = args[arg_index];
+		if (collecting_args)
+		{
+			append_arg(&build_options);
+			continue;
+		}
+		if (command_passes_args(build_options.command) && arg_match("--"))
+		{
+			collecting_args = true;
+			continue;
+		}
 		if (current_arg[0] == '-')
 		{
 			parse_option(&build_options);
@@ -1202,7 +1233,7 @@ BuildOptions parse_arguments(int argc, const char *argv[])
 			parse_command(&build_options);
 			continue;
 		}
-		if (command_accepts_files(build_options.command) || build_options.command == COMMAND_GENERATE_HEADERS)
+		if (command_accepts_files(build_options.command))
 		{
 			append_file(&build_options);
 			continue;
@@ -1213,9 +1244,9 @@ BuildOptions parse_arguments(int argc, const char *argv[])
 	{
 		FAIL_WITH_ERR("Missing a compiler command such as 'compile' or 'build'.");
 	}
+	debug_log = build_options.verbosity_level > 2;
 	return build_options;
 }
-
 
 ArchOsTarget arch_os_target_from_string(const char *target)
 {
@@ -1228,3 +1259,188 @@ ArchOsTarget arch_os_target_from_string(const char *target)
 	}
 	return ARCH_OS_TARGET_DEFAULT;
 }
+
+// -- helpers
+
+static const char *check_dir(const char *path)
+{
+	static char *original_path = NULL;
+	if (!original_path)
+	{
+		original_path = getcwd(NULL, 0);
+	}
+	if (!dir_change(path)) error_exit("The path \"%s\" does not point to a valid directory.", path);
+	if (!dir_change(original_path)) FAIL_WITH_ERR("Failed to change path to %s.", original_path);
+	return path;
+}
+
+static inline bool at_end()
+{
+	return arg_index == arg_count - 1;
+}
+
+static inline const char *next_arg()
+{
+	ASSERT0(!at_end());
+	current_arg = args[++arg_index];
+	return current_arg;
+}
+
+static inline bool next_is_opt()
+{
+	return args[arg_index + 1][0] == '-';
+}
+
+INLINE bool match_longopt(const char *name)
+{
+	return str_eq(&current_arg[2], name);
+}
+
+static inline bool match_shortopt(const char *name)
+{
+	return str_eq(&current_arg[1], name);
+}
+
+void append_file(BuildOptions *build_options)
+{
+	if (vec_size(build_options->files) == MAX_COMMAND_LINE_FILES)
+	{
+		EOUTPUT("Max %d files may be specified.", MAX_COMMAND_LINE_FILES);
+		exit_compiler(EXIT_FAILURE);
+	}
+	vec_add(build_options->files, current_arg);
+}
+
+static inline const char *match_argopt(const char *name)
+{
+	size_t len = strlen(name);
+	if (memcmp(&current_arg[2], name, len) != 0) return false;
+	if (current_arg[2 + len] != '=') return false;
+	return &current_arg[2 + len + 1];
+}
+
+void append_arg(BuildOptions *build_options)
+{
+	if (vec_size(build_options->args) == MAX_COMMAND_LINE_RUN_ARGS)
+	{
+		EOUTPUT("Max %d args may be specified.", MAX_COMMAND_LINE_RUN_ARGS);
+		exit_compiler(EXIT_FAILURE);
+	}
+	vec_add(build_options->args, current_arg);
+}
+
+static bool arg_match(const char *candidate)
+{
+	return str_eq(current_arg, candidate);
+}
+
+static void parse_optional_target(BuildOptions *options)
+{
+	if (at_end() || next_is_opt())
+	{
+		options->target_select = NULL;
+	}
+	else
+	{
+		options->target_select = next_arg();
+	}
+}
+
+static void add_linker_arg(BuildOptions *options, const char *arg)
+{
+	if (options->linker_arg_count == MAX_BUILD_LIB_DIRS)
+	{
+		error_exit("Too many linker arguments are given, more than %d\n", MAX_BUILD_LIB_DIRS);
+	}
+	options->linker_args[options->linker_arg_count++] = arg;
+}
+
+/**
+ * Update feature flags, adding to one list and removing it from the other.
+ * @param flags the "add" flags
+ * @param removed_flags the "undef" flags
+ * @param arg the argument to add or undef
+ * @param add true if we add, false to undef
+ */
+static void update_feature_flags(const char ***flags, const char ***removed_flags, const char *arg, bool add)
+{
+	// We keep two lists "remove" and "add" lists:
+	const char ***to_remove_from = add ? removed_flags : flags;
+
+	// Remove from opposite list using string equality
+	// More elegant would be using a Set or Map, but that's overkill
+	// for something that's likely just 1-2 values.
+	FOREACH_IDX(i, const char *, value, *to_remove_from)
+	{
+		if (str_eq(value, arg))
+		{
+			vec_erase_at(*to_remove_from, i);
+			break;
+		}
+	}
+
+	// First we check that it's not in the list
+	const char ***to_add_to_ref = add ? flags : removed_flags;
+	FOREACH(const char *, value, *to_add_to_ref)
+	{
+		// If we have a match, we don't add it.
+		if (str_eq(value, arg)) return;
+	}
+
+	// No match, so add it.
+	vec_add(*to_add_to_ref, arg);
+}
+
+static void print_all_targets(void)
+{
+	PRINTF("Available targets:");
+	for (unsigned i = 1; i <= ARCH_OS_TARGET_LAST; i++)
+	{
+		PRINTF("   %s", arch_os_target[i]);
+	}
+}
+
+static int parse_multi_option(const char *start, unsigned count, const char **elements)
+{
+	const char *arg = current_arg;
+	int select = str_findlist(start, count, elements);
+	if (select < 0) error_exit("error: %.*s invalid option '%s' given.", (int)(start - arg), start, arg);
+	return select;
+}
+
+const char *trust_level[3] = {
+		[TRUST_NONE] = "none",
+		[TRUST_INCLUDE] = "include",
+		[TRUST_FULL] = "full",
+};
+
+const char *arch_os_target[ARCH_OS_TARGET_LAST + 1] = {
+		[ANDROID_AARCH64] = "android-aarch64",
+		[ELF_AARCH64] = "elf-aarch64",
+		[ELF_RISCV32] = "elf-riscv32",
+		[ELF_RISCV64] = "elf-riscv64",
+		[ELF_X86] = "elf-x86",
+		[ELF_X64] = "elf-x64",
+		[ELF_XTENSA] = "elf-xtensa",
+		[FREEBSD_X86] = "freebsd-x86",
+		[FREEBSD_X64] = "freebsd-x64",
+		[IOS_AARCH64] = "ios-aarch64",
+		[LINUX_AARCH64] = "linux-aarch64",
+		[LINUX_RISCV32] = "linux-riscv32",
+		[LINUX_RISCV64] = "linux-riscv64",
+		[LINUX_X86] = "linux-x86",
+		[LINUX_X64] = "linux-x64",
+		[MACOS_AARCH64] = "macos-aarch64",
+		[MACOS_X64] = "macos-x64",
+		[MCU_X86] = "mcu-x86",
+		[MINGW_X64] = "mingw-x64",
+		[NETBSD_X86] = "netbsd-x86",
+		[NETBSD_X64] = "netbsd-x64",
+		[OPENBSD_X86] = "openbsd-x86",
+		[OPENBSD_X64] = "openbsd-x64",
+		[WASM32] = "wasm32",
+		[WASM64] = "wasm64",
+		[WINDOWS_AARCH64] = "windows-aarch64",
+		[WINDOWS_X64] = "windows-x64",
+};
+

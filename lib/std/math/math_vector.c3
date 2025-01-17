@@ -25,11 +25,11 @@ macro Vec4.distance_sq(self, Vec4 v2) => (self - v2).length_sq();
 
 macro Vec2f.transform(self, Matrix4f mat) => transform2(self, mat);
 macro Vec2f.rotate(self, float angle) => rotate(self, angle);
-macro Vec2f.angle(self, Vec2f v2) => math::atan2(v2[1], v2[0]) - math::atan2(self[1], v2[0]);
+macro Vec2f.angle(self, Vec2f v2) => math::atan2(v2.y, v2.x) - math::atan2(self.y, self.x);
 
 macro Vec2.transform(self, Matrix4 mat) => transform2(self, mat);
 macro Vec2.rotate(self, double angle) => rotate(self, angle);
-macro Vec2.angle(self, Vec2 v2) => math::atan2(v2[1], v2[0]) - math::atan2(self[1], v2[0]);
+macro Vec2.angle(self, Vec2 v2) => math::atan2(v2.y, v2.x) - math::atan2(self.y, self.x);
 
 macro Vec2f.clamp_mag(self, float min, float max) => clamp_magnitude(self, min, max);
 macro Vec3f.clamp_mag(self, float min, float max) => clamp_magnitude(self, min, max);
@@ -66,8 +66,8 @@ fn Vec3 Vec3.refract(self, Vec3 n, double r) => refract3(self, n, r);
 fn void ortho_normalize(Vec3f* v1, Vec3f* v2) => ortho_normalize3(v1, v2);
 fn void ortho_normalized(Vec3* v1, Vec3* v2) => ortho_normalize3(v1, v2);
 
-fn Matrix4f matrix4f_look_at(Vec3f eye, Vec3f target, Vec3f up) => matrix_look_at(Matrix4f, eye, target, up);
-fn Matrix4 matrix4_look_at(Vec3 eye, Vec3 target, Vec3 up) => matrix_look_at(Matrix4, eye, target, up);
+fn Matrix4f matrix4f_look_at(Vec3f eye, Vec3f target, Vec3f up) @deprecated => matrix::look_at(<float>)(eye, target, up);
+fn Matrix4 matrix4_look_at(Vec3 eye, Vec3 target, Vec3 up) @deprecated => matrix::look_at(<double>)(eye, target, up);
 
 fn Vec3f Vec3f.rotate_quat(self, Quaternionf q) => rotate_by_quat3(self, q);
 fn Vec3 Vec3.rotate_quat(self, Quaternion q) => rotate_by_quat3(self, q);
@@ -194,20 +194,6 @@ macro rotate_axis_angle(v, axis, angle) @private
 	wwv *= 2;
 
 	return v + wv + wwv;
-}
-
-macro matrix_look_at($Type, eye, target, up) @private
-{
-	var vz = (eye - target).normalize();
-	var vx = up.cross(vz).normalize();
-	var vy = vz.cross(vx);
-
-	return $Type {
-		vx[0], vx[1], vx[2], - vx.dot(eye),
-		vy[0], vy[1], vy[2], - vy.dot(eye),
-		vz[0], vz[1], vz[2], - vz.dot(eye),
-		0.0, 0.0, 0.0, 1
-	};
 }
 
 macro unproject3(v, m1, m2) @private

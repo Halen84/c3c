@@ -2,15 +2,20 @@
 // Use of this source code is governed by the MIT license
 // a copy of which can be found in the LICENSE_STDLIB file.
 
-module std::core::mem::allocator;
+module std::core::mem::allocator @if(env::LIBC);
+import std::io;
 import libc;
 
 const LibcAllocator LIBC_ALLOCATOR = {};
-distinct LibcAllocator (Allocator) = uptr;
+distinct LibcAllocator (Allocator, Printable) = uptr;
+
+fn String LibcAllocator.to_string(&self, Allocator allocator) @dynamic => "Libc allocator".copy(allocator);
+fn usz! LibcAllocator.to_format(&self, Formatter *format) @dynamic => format.print("Libc allocator");
 
 module std::core::mem::allocator @if(env::POSIX);
 import std::os;
 import libc;
+
 
 fn void*! LibcAllocator.acquire(&self, usz bytes, AllocInitType init_type, usz alignment) @dynamic
 {
@@ -23,7 +28,7 @@ fn void*! LibcAllocator.acquire(&self, usz bytes, AllocInitType init_type, usz a
 			mem::clear(data, bytes, mem::DEFAULT_MEM_ALIGNMENT);
 			return data;
 		}
-        return libc::calloc(1, bytes) ?: AllocationFailure.OUT_OF_MEMORY?;
+		return libc::calloc(1, bytes) ?: AllocationFailure.OUT_OF_MEMORY?;
 	}
 	else
 	{
@@ -36,17 +41,17 @@ fn void*! LibcAllocator.acquire(&self, usz bytes, AllocInitType init_type, usz a
 		{
 			if (!(data = libc::malloc(bytes))) return AllocationFailure.OUT_OF_MEMORY?;
 		}
-        $if env::TESTING:
-		    for (usz i = 0; i < bytes; i++) ((char*)data)[i] = 0xAA;
-        $endif
-        return data;
+		$if env::TESTING:
+			for (usz i = 0; i < bytes; i++) ((char*)data)[i] = 0xAA;
+		$endif
+		return data;
 	}
 }
 
 fn void*! LibcAllocator.resize(&self, void* old_ptr, usz new_bytes, usz alignment) @dynamic
 {
 	if (alignment <= mem::DEFAULT_MEM_ALIGNMENT) return libc::realloc(old_ptr, new_bytes) ?: AllocationFailure.OUT_OF_MEMORY?;
-    void* new_ptr;
+	void* new_ptr;
 	if (posix::posix_memalign(&new_ptr, alignment, new_bytes)) return AllocationFailure.OUT_OF_MEMORY?;
 
 	$switch
@@ -79,16 +84,16 @@ fn void*! LibcAllocator.acquire(&self, usz bytes, AllocInitType init_type, usz a
 	{
 		if (alignment > 0)
 		{
-			return win32::_aligned_recalloc(null, bytes, alignment) ?: AllocationFailure.OUT_OF_MEMORY?;
+			return win32::_aligned_recalloc(null, 1, bytes, alignment) ?: AllocationFailure.OUT_OF_MEMORY?;
 		}
 		return libc::calloc(1, bytes) ?: AllocationFailure.OUT_OF_MEMORY?;
 	}
 	void* data = alignment > 0 ? win32::_aligned_malloc(bytes, alignment) : libc::malloc(bytes);
 	if (!data) return AllocationFailure.OUT_OF_MEMORY?;
-    $if env::TESTING:
+	$if env::TESTING:
 		for (usz i = 0; i < bytes; i++) ((char*)data)[i] = 0xAA;
 	$endif
-    return data;
+	return data;
 }
 
 fn void*! LibcAllocator.resize(&self, void* old_ptr, usz new_bytes, usz alignment) @dynamic
@@ -104,13 +109,13 @@ fn void LibcAllocator.release(&self, void* old_ptr, bool aligned) @dynamic
 {
 	if (aligned)
 	{
-    	win32::_aligned_free(old_ptr);
-    	return;
+		win32::_aligned_free(old_ptr);
+		return;
 	}
 	libc::free(old_ptr);
 }
 
-module std::core::mem::allocator @if(!env::WIN32 && !env::POSIX);
+module std::core::mem::allocator @if(!env::WIN32 && !env::POSIX && env::LIBC);
 import libc;
 
 fn void*! LibcAllocator.acquire(&self, usz bytes, AllocInitType init_type, usz alignment) @dynamic
@@ -118,16 +123,16 @@ fn void*! LibcAllocator.acquire(&self, usz bytes, AllocInitType init_type, usz a
 	if (init_type == ZERO)
 	{
 		void* data = alignment ? @aligned_alloc(fn void*(usz bytes) => libc::calloc(bytes, 1), bytes, alignment)!! : libc::calloc(bytes, 1);
-        return data ?: AllocationFailure.OUT_OF_MEMORY?;
+		return data ?: AllocationFailure.OUT_OF_MEMORY?;
 	}
 	else
 	{
 		void* data = alignment ? @aligned_alloc(libc::malloc, bytes, alignment)!! : libc::malloc(bytes);
-        if (!data) return AllocationFailure.OUT_OF_MEMORY?;
-        $if env::TESTING:
-		    for (usz i = 0; i < bytes; i++) ((char*)data)[i] = 0xAA;
-        $endif
-        return data;
+		if (!data) return AllocationFailure.OUT_OF_MEMORY?;
+		$if env::TESTING:
+			for (usz i = 0; i < bytes; i++) ((char*)data)[i] = 0xAA;
+		$endif
+		return data;
 	}
 }
 

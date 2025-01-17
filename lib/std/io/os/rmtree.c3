@@ -1,9 +1,9 @@
 module std::io::os @if(env::POSIX);
 import std::io, std::os, libc;
 
-/**
- * @require dir.str_view()
- **/
+<*
+ @require dir.str_view()
+*>
 fn void! native_rmtree(Path dir)
 {
 	DIRPtr directory = posix::opendir(dir.as_zstr());
@@ -16,7 +16,7 @@ fn void! native_rmtree(Path dir)
 		{
 			String name = ((ZString)&entry.name).str_view();
 			if (!name || name == "." || name == "..") continue;
-			Path new_path = dir.tappend(name)!;
+			Path new_path = dir.temp_append(name)!;
 			if (entry.d_type == posix::DT_DIR)
 			{
 				native_rmtree(new_path)!;
@@ -49,7 +49,7 @@ fn void! native_rmtree(Path path)
 		{
 			String filename = string::new_from_wstring((WString)&find_data.cFileName, allocator::temp())!;
 			if (filename == "." || filename == "..") continue;
-			Path file_path = path.tappend(filename)!;
+			Path file_path = path.temp_append(filename)!;
 			if (find_data.dwFileAttributes & win32::FILE_ATTRIBUTE_DIRECTORY)
 			{
 				native_rmtree(file_path)!;

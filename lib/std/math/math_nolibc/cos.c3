@@ -1,8 +1,8 @@
-module std::math::nolibc @if(env::NO_LIBC);
+module std::math::nolibc @if(env::NO_LIBC || $feature(C3_MATH));
 
 fn float _cosf(float x) @extern("cosf") @weak @nostrip
 {
-	uint ix = bitcast(x, uint);
+	uint ix = x.word();
 	uint sign = ix >> 31;
 	ix &= 0x7fffffff;
 
@@ -51,24 +51,23 @@ fn float _cosf(float x) @extern("cosf") @weak @nostrip
  * ====================================================
  */
 
-fn double _cos(double x) @weak @nostrip
+fn double _cos(double x) @extern("cos")  @weak @nostrip
 {
 	// High word of x.
-	uint ix = (uint)(bitcast(x, ulong) >> 32);
-	ix &= 0x7fffffff;
+	uint ix = x.high_word() & 0x7fffffff;
 
 	switch
 	{
 		// |x| ~< pi/4
 		case ix <= 0x3fe921fb:
-		    if (ix < 0x3e46a09e)
-		    {
-		        // |x| < 2**-27 * sqrt(2)
-			    // raise inexact if x!=0
-			    force_eval_add(x, 0x1p120f);
-			    return 1.0;
-		    }
-		    return __cos(x, 0);
+			if (ix < 0x3e46a09e)
+			{
+				// |x| < 2**-27 * sqrt(2)
+				// raise inexact if x!=0
+				force_eval_add(x, 0x1p120f);
+				return 1.0;
+			}
+			return __cos(x, 0);
 		case ix >= 0x7ff00000:
 			// cos(Inf or NaN) is NaN
 			return x - x;

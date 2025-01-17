@@ -1,13 +1,14 @@
 #include "build_internal.h"
 #include "utils/common.h"
+#include <math.h>
+
 
 void check_json_keys(const char* valid_keys[][2], size_t key_count, const char* deprecated_keys[], size_t deprecated_key_count, JSONObject *json, const char *target_name, const char *option)
 {
 	static bool failed_shown = false;
 	bool failed = false;
-	for (size_t i = 0; i < json->member_len; i++)
+	FOREACH(const char *, key, json->keys)
 	{
-		const char *key = json->keys[i];
 		for (size_t j = 0; j < key_count; j++)
 		{
 			if (str_eq(key, valid_keys[j][0])) goto OK;
@@ -16,11 +17,12 @@ void check_json_keys(const char* valid_keys[][2], size_t key_count, const char* 
 		{
 			if (str_eq(key, deprecated_keys[j]))
 			{
+				if (silence_deprecation) goto OK;
 				WARNING("Target '%s' is using the deprecated parameter '%s'.", target_name, key);
 				goto OK;
 			}
 		}
-		WARNING("Unknown parameter '%s' in '%s'", target_name, key);
+		WARNING("Unknown parameter '%s' in '%s'", key, target_name);
 		failed = true;
 		OK:;
 	}
@@ -33,7 +35,7 @@ void check_json_keys(const char* valid_keys[][2], size_t key_count, const char* 
 
 const char *get_optional_string(const char *file, const char *category, JSONObject *table, const char *key)
 {
-	JSONObject *value = json_obj_get(table, key);
+	JSONObject *value = json_map_get(table, key);
 	if (!value) return NULL;
 	if (value->type != J_STRING)
 	{
@@ -49,7 +51,7 @@ const char *get_mandatory_string(const char *file, const char *category, JSONObj
 	if (!value)
 	{
 		if (category) error_exit("In file '%s': The mandatory field '%s' was missing in '%s'.", file, key, category);
-		error_exit("In file '%s': The mandatory field '%s' was missing.", file);
+		error_exit("In file '%s': The mandatory field '%s' was missing.", file, key);
 	}
 	return value;
 }
@@ -64,7 +66,7 @@ const char *get_string(const char *file, const char *category, JSONObject *table
 
 int get_valid_bool(const char *file, const char *target, JSONObject *json, const char *key, int default_val)
 {
-	JSONObject *value = json_obj_get(json, key);
+	JSONObject *value = json_map_get(json, key);
 	if (!value) return default_val;
 	if (value->type != J_BOOL)
 	{
@@ -76,7 +78,7 @@ int get_valid_bool(const char *file, const char *target, JSONObject *json, const
 
 const char **get_string_array(const char *file, const char *category, JSONObject *table, const char *key, bool mandatory)
 {
-	JSONObject *value = json_obj_get(table, key);
+	JSONObject *value = json_map_get(table, key);
 	if (!value)
 	{
 		if (mandatory)
@@ -88,9 +90,8 @@ const char **get_string_array(const char *file, const char *category, JSONObject
 	}
 	if (value->type != J_ARRAY) goto NOT_ARRAY;
 	const char **values = NULL;
-	for (unsigned i = 0; i < value->array_len; i++)
+	FOREACH(JSONObject *, val, value->elements)
 	{
-		JSONObject *val = value->elements[i];
 		if (val->type != J_STRING) goto NOT_ARRAY;
 		vec_add(values, val->str);
 	}
@@ -160,7 +161,7 @@ void get_list_append_strings(const char *file, const char *target, JSONObject *j
 
 int get_valid_string_setting(const char *file, const char *target, JSONObject *json, const char *key, const char** values, int first_result, int count, const char *expected)
 {
-	JSONObject *value = json_obj_get(json, key);
+	JSONObject *value = json_map_get(json, key);
 	if (!value)
 	{
 		return -1;
@@ -175,4 +176,33 @@ int get_valid_string_setting(const char *file, const char *target, JSONObject *j
 		error_exit("In file '%s': '%s' had an invalid value for '%s', expected %s", file, target, key, expected);
 	}
 	error_exit("In file '%s': Invalid value for '%s', expected %s", file, key, expected);
+}
+
+int get_valid_enum_from_string(const char *str, const char *target, const char **values, int count, const char *expected)
+{
+	int res = str_findlist(str, count, values);
+	if (res >= 0) return res;
+	if (target)
+	{
+		error_exit("'%s' had an invalid value, expected %s", target, expected);
+	}
+	error_exit("Invalid value, expected %s", expected);
+}
+
+long get_valid_integer(JSONObject *table, const char *key, const char *category, bool mandatory)
+{
+	JSONObject *value = json_map_get(table, key);
+	if (!value)
+	{
+		if (mandatory)
+		{
+			error_exit("%s was missing a mandatory '%s' field, please add it.", category, key);
+		}
+		return -1;
+	}
+	if (value->type != J_NUMBER || trunc(value->f) != value->f)
+	{
+		error_exit("%s had an invalid mandatory '%s' field that was not an integer, please correct it.", category, key);
+	}
+	return (long)trunc(value->f);
 }

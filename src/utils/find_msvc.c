@@ -22,8 +22,7 @@ WindowsSDK get_windows_link_paths()
 		error_exit("Failed to find windows kit root.");
 	}
 
-	out.windows_sdk_um_library_path = str_printf("%s\\um\\x64", path);
-	out.windows_sdk_ucrt_library_path = str_printf("%s\\ucrt\\x64", path);
+	out.windows_sdk_path = path;
 	out.vs_library_path = find_visual_studio();
 
 	return out;
@@ -35,11 +34,11 @@ static char *find_visual_studio(void)
 	// Let's locate vswhere.exe
 	char *path = win_utf16to8(_wgetenv(L"ProgramFiles(x86)"));
 	scratch_buffer_clear();
-	scratch_buffer_printf("\"%s\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -prerelease -property installationPath", path);
+	scratch_buffer_printf("\"%s\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -latest -prerelease -property installationPath -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -products *", path);
 	const char *install_path = NULL;
 
 	// Call vswhere.exe
-	if (!execute_cmd_failable(scratch_buffer_to_string(), &install_path))
+	if (!execute_cmd_failable(scratch_buffer_to_string(), &install_path, NULL))
 	{
 		error_exit("Failed to find vswhere.exe to detect MSVC.");
 	}
@@ -136,7 +135,7 @@ static char *find_windows_kit_root(void)
 
 	free(root);
 	free(best_file);
-	return scratch_buffer_to_string();
+	return scratch_buffer_copy();
 
 SEARCH_FAILED:
 	free(root);

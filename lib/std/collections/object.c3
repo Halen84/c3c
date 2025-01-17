@@ -48,9 +48,9 @@ fn usz! Object.to_format(&self, Formatter* formatter) @dynamic
 			return n;
 		case ObjectInternalMap:
 			usz n = formatter.printf("{")!;
-			@pool()
+			@stack_mem(1024; Allocator mem)
 			{
-				foreach (i, key : self.map.key_tlist())
+				foreach (i, key : self.map.copy_keys(mem))
 				{
 					if (i > 0) n += formatter.printf(",")!;
 					n += formatter.printf(`"%s":`, key)!;
@@ -63,11 +63,11 @@ fn usz! Object.to_format(&self, Formatter* formatter) @dynamic
 			switch (self.type.kindof)
 			{
 				case SIGNED_INT:
-					return formatter.printf("%d", self.i)!;
+					return formatter.printf("%d", (int128)self.i)!;
 				case UNSIGNED_INT:
 					return formatter.printf("%d", (uint128)self.i)!;
 				case FLOAT:
-					return formatter.printf("%d", self.f)!;
+					return formatter.printf("%g", self.f)!;
 				case ENUM:
 					return formatter.printf("%d", self.i)!;
 				default:
@@ -128,9 +128,9 @@ fn void Object.free(&self)
 			self.array.free();
 		case ObjectInternalMap:
 			self.map.@each_entry(; ObjectInternalMapEntry* entry) {
-				allocator::free(self.allocator, entry.key);
 				entry.value.free();
 			};
+			self.map.free();
 		default:
 			break;
 	}
@@ -148,49 +148,47 @@ fn bool Object.is_int(&self) @inline => self.type == int128.typeid;
 fn bool Object.is_keyable(&self) => self.is_empty() || self.is_map();
 fn bool Object.is_indexable(&self) => self.is_empty() || self.is_array();
 
-/**
- * @require self.is_keyable()
- **/
+<*
+ @require self.is_keyable()
+*>
 fn void Object.init_map_if_needed(&self) @private
 {
 	if (self.is_empty())
 	{
 		self.type = ObjectInternalMap.typeid;
-		self.map.new_init(.allocator = self.allocator);
+		self.map.new_init(allocator: self.allocator);
 	}
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn void Object.init_array_if_needed(&self) @private
 {
 	if (self.is_empty())
 	{
 		self.type = ObjectInternalList.typeid;
-		self.array.new_init(.allocator = self.allocator);
+		self.array.new_init(allocator: self.allocator);
 	}
 }
 
-/**
- * @require self.is_keyable()
- **/
+<*
+ @require self.is_keyable()
+*>
 fn void Object.set_object(&self, String key, Object* new_object) @private
 {
 	self.init_map_if_needed();
 	ObjectInternalMapEntry*! entry = self.map.get_entry(key);
 	defer
 	{
-		(void)allocator::free(self.allocator, entry.key);
 		(void)entry.value.free();
 	}
-	self.map.set(key.copy(self.map.allocator), new_object);
+	self.map.set(key, new_object);
 }
 
 macro Object* Object.object_from_value(&self, value) @private
 {
 	var $Type = $typeof(value);
-
 	$switch
 		$case types::is_int($Type):
 			return new_int(value, self.allocator);
@@ -220,9 +218,9 @@ macro Object* Object.set(&self, String key, value)
 	return val;
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 macro Object* Object.set_at(&self, usz index, String key, value)
 {
 	Object* val = self.object_from_value(value);
@@ -230,10 +228,10 @@ macro Object* Object.set_at(&self, usz index, String key, value)
 	return val;
 }
 
-/**
- * @require self.is_indexable()
- * @ensure return != null
- **/
+<*
+ @require self.is_indexable()
+ @ensure return != null
+*>
 macro Object* Object.push(&self, value)
 {
 	Object* val = self.object_from_value(value);
@@ -241,42 +239,42 @@ macro Object* Object.push(&self, value)
 	return val;
 }
 
-/**
- * @require self.is_keyable()
- **/
+<*
+ @require self.is_keyable()
+*>
 fn Object*! Object.get(&self, String key) => self.is_empty() ? SearchResult.MISSING? : self.map.get(key);
 
 
 fn bool Object.has_key(&self, String key) => self.is_map() && self.map.has_key(key);
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn Object* Object.get_at(&self, usz index)
 {
 	return self.array.get(index);
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn usz Object.get_len(&self)
 {
 	return self.array.len();
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn void Object.push_object(&self, Object* to_append)
 {
 	self.init_array_if_needed();
 	self.array.push(to_append);
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn void Object.set_object_at(&self, usz index, Object* to_set)
 {
 	self.init_array_if_needed();
@@ -293,9 +291,9 @@ fn void Object.set_object_at(&self, usz index, Object* to_set)
 	self.array.set_at(index, to_set);
 }
 
-/**
- * @require $Type.kindof.is_int() "Expected an integer type."
- **/
+<*
+ @require $Type.kindof.is_int() "Expected an integer type."
+*>
 macro get_integer_value(Object* value, $Type)
 {
 	if (value.is_float())
@@ -315,19 +313,19 @@ macro get_integer_value(Object* value, $Type)
 }
 
 
-/**
- * @require self.is_indexable()
- * @require $Type.kindof.is_int() : "Expected an integer type"
- **/
+<*
+ @require self.is_indexable()
+ @require $Type.kindof.is_int() : "Expected an integer type"
+*>
 macro Object.get_integer_at(&self, $Type, usz index) @private
 {
 	return get_integer_value(self.get_at(index), $Type);
 }
 
-/**
- * @require self.is_keyable()
- * @require $Type.kindof.is_int() : "Expected an integer type"
- **/
+<*
+ @require self.is_keyable()
+ @require $Type.kindof.is_int() : "Expected an integer type"
+*>
 macro Object.get_integer(&self, $Type, String key) @private
 {
 	return get_integer_value(self.get(key), $Type);
@@ -357,9 +355,9 @@ fn uint! Object.get_uint_at(&self, usz index) => self.get_integer_at(uint, index
 fn ulong! Object.get_ulong_at(&self, usz index) => self.get_integer_at(ulong, index);
 fn uint128! Object.get_uint128_at(&self, usz index) => self.get_integer_at(uint128, index);
 
-/**
- * @require self.is_keyable()
- **/
+<*
+ @require self.is_keyable()
+*>
 fn String! Object.get_string(&self, String key)
 {
 	Object* value = self.get(key)!;
@@ -367,9 +365,9 @@ fn String! Object.get_string(&self, String key)
 	return value.s;
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn String! Object.get_string_at(&self, usz index)
 {
 	Object* value = self.get_at(index);
@@ -377,9 +375,9 @@ fn String! Object.get_string_at(&self, usz index)
 	return value.s;
 }
 
-/**
- * @require self.is_keyable()
- **/
+<*
+ @require self.is_keyable()
+*>
 macro String! Object.get_enum(&self, $EnumType, String key)
 {
 	Object value = self.get(key)!;
@@ -387,9 +385,9 @@ macro String! Object.get_enum(&self, $EnumType, String key)
 	return ($EnumType)value.i;
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 macro String! Object.get_enum_at(&self, $EnumType, usz index)
 {
 	Object value = self.get_at(index);
@@ -397,9 +395,9 @@ macro String! Object.get_enum_at(&self, $EnumType, usz index)
 	return ($EnumType)value.i;
 }
 
-/**
- * @require self.is_keyable()
- **/
+<*
+ @require self.is_keyable()
+*>
 fn bool! Object.get_bool(&self, String key)
 {
 	Object* value = self.get(key)!;
@@ -408,9 +406,9 @@ fn bool! Object.get_bool(&self, String key)
 }
 
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn bool! Object.get_bool_at(&self, usz index)
 {
 	Object* value = self.get_at(index);
@@ -418,9 +416,9 @@ fn bool! Object.get_bool_at(&self, usz index)
 	return value.b;
 }
 
-/**
- * @require self.is_keyable()
- **/
+<*
+ @require self.is_keyable()
+*>
 fn double! Object.get_float(&self, String key)
 {
 	Object* value = self.get(key)!;
@@ -437,9 +435,9 @@ fn double! Object.get_float(&self, String key)
 	}
 }
 
-/**
- * @require self.is_indexable()
- **/
+<*
+ @require self.is_indexable()
+*>
 fn double! Object.get_float_at(&self, usz index)
 {
 	Object* value = self.get_at(index);

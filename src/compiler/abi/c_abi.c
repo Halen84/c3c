@@ -61,10 +61,10 @@ bool abi_arg_is_indirect(ABIArgInfo *info)
 
 ABIArgInfo *abi_arg_new_indirect_realigned(AlignSize alignment, Type *by_val_type)
 {
-	assert(alignment > 0);
+	ASSERT0(alignment > 0);
 	ABIArgInfo *info = abi_arg_new(ABI_ARG_INDIRECT);
 	info->indirect.alignment = alignment;
-	assert(info->indirect.alignment);
+	ASSERT0(info->indirect.alignment);
 	info->attributes.realign = true;
 	info->indirect.type = by_val_type;
 	info->attributes.by_val = true;
@@ -77,7 +77,7 @@ ABIArgInfo *abi_arg_new_indirect_by_val(Type *by_val_type)
 	info->indirect.alignment = type_abi_alignment(by_val_type);
 	info->indirect.type = by_val_type;
 	info->attributes.by_val = true;
-	assert(info->indirect.alignment);
+	ASSERT0(info->indirect.alignment);
 	return info;
 }
 
@@ -85,7 +85,7 @@ ABIArgInfo *abi_arg_new_indirect_not_by_val(Type *type)
 {
 	ABIArgInfo *info = abi_arg_new(ABI_ARG_INDIRECT);
 	info->indirect.alignment = type_abi_alignment(type);
-	assert(info->indirect.alignment);
+	ASSERT0(info->indirect.alignment);
 	info->indirect.type = type;
 	info->attributes.by_val = false;
 	return info;
@@ -175,7 +175,7 @@ ABIArgInfo *abi_arg_new_direct_coerce_int(void)
 
 ABIArgInfo *abi_arg_new_direct_coerce_type(Type *type)
 {
-	assert(type);
+	ASSERT0(type);
 	ABIArgInfo *info = abi_arg_new(ABI_ARG_DIRECT_COERCE);
 	info->direct_coerce_type = type->canonical;
 	return info;
@@ -191,9 +191,9 @@ ABIArgInfo *abi_arg_new_direct_struct_expand_i32(uint8_t elements)
 
 void c_abi_func_create(FunctionPrototype *proto)
 {
-	assert(!proto->is_resolved);
+	ASSERT0(!proto->is_resolved);
 	proto->is_resolved = true;
-	switch (platform_target.abi)
+	switch (compiler.platform.abi)
 	{
 		case ABI_X64:
 			c_abi_func_create_x64(proto);
@@ -240,7 +240,7 @@ ABIArgInfo *c_abi_classify_argument_type_default(Type *type)
 	// Struct-likes are returned by sret
 	if (type_is_abi_aggregate(type)) return abi_arg_new_indirect_by_val(type);
 
-	if (type_is_int128(type) && !platform_target.int128) return abi_arg_new_indirect_by_val(type);
+	if (type_is_int128(type) && !compiler.platform.int128) return abi_arg_new_indirect_by_val(type);
 
 	// Otherwise do we have a type that needs promotion?
 	if (type_is_promotable_int_bool(type)) return abi_arg_new_direct_int_ext(type);

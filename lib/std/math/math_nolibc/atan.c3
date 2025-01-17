@@ -1,4 +1,16 @@
-module std::math::nolibc @if(env::NO_LIBC);
+module std::math::nolibc @if(env::NO_LIBC || $feature(C3_MATH));
+
+/* origin: FreeBSD /usr/src/lib/msun/src/s_atan.c */
+/*
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunPro, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ */
 
 const double[*] ATANHI @private = {
   4.63647609000806093515e-01, /* atan(0.5)hi 0x3FDDAC67, 0x0561BB4F */
@@ -38,11 +50,11 @@ fn double _atan(double x) @weak @extern("atan") @nostrip
 	{
 		case ix >= 0x44100000:
 			/* if |x| >= 2^66 */
-            if (math::is_nan(x)) return x;
-            double z = ATANHI[3] + 0x1p-120f;
-            return sign ? -z : z;
-        case ix < 0x3fdc0000:
-            /* |x| < 0.4375 */
+			if (math::is_nan(x)) return x;
+			double z = ATANHI[3] + 0x1p-120f;
+			return sign ? -z : z;
+		case ix < 0x3fdc0000:
+			/* |x| < 0.4375 */
 			if (ix < 0x3e400000)
 			{
 				/* |x| < 2^-27 */
@@ -55,8 +67,8 @@ fn double _atan(double x) @weak @extern("atan") @nostrip
 			}
 			id = -1;
 		case ix < 0x3ff30000:
-		    /* |x| < 1.1875 */
-		    x = math::abs(x);
+			/* |x| < 1.1875 */
+			x = math::abs(x);
 			if (ix < 0x3fe60000)
 			{
 				/*  7/16 <= |x| < 11/16 */
@@ -88,6 +100,21 @@ fn double _atan(double x) @weak @extern("atan") @nostrip
 	z = ATANHI[id] - (x * (s1 + s2) - ATANLO[id] - x);
 	return sign ? -z : z;
 }
+
+/* origin: FreeBSD /usr/src/lib/msun/src/s_atanf.c */
+/*
+ * Conversion to float by Ian Lance Taylor, Cygnus Support, ian@cygnus.com.
+ */
+/*
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunPro, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ */
 
 const float[*] ATANHIF @private = {
   4.6364760399e-01, /* atan(0.5)hi 0x3eed6338 */
@@ -128,32 +155,32 @@ fn float _atanf(float x) @weak @extern("atanf") @nostrip
 	{
 		case ix < 0x3ee00000:
 			/* |x| < 0.4375 */
-            if (ix < 0x39800000)
-            {
-                /* |x| < 2**-12 */
-                if (ix < 0x00800000)
-                {
-                    /* raise underflow for subnormal x */
+			if (ix < 0x39800000)
+			{
+				/* |x| < 2**-12 */
+				if (ix < 0x00800000)
+				{
+					/* raise underflow for subnormal x */
 					float f = @volatile_load(x);
-                    f = f * f;
-                }
-            	return x;
-            }
-            id = -1;
-        case ix < 0x3f980000:
-            /* |x| < 1.1875 */
+					f = f * f;
+				}
+				return x;
+			}
+			id = -1;
+		case ix < 0x3f980000:
+			/* |x| < 1.1875 */
 			x = math::abs(x);
-	        if (ix < 0x3f300000)
-	        {
-	            /*  7/16 <= |x| < 11/16 */
-            	id = 0;
-            	x = (2.0f * x - 1.0f) / (2.0f + x);
-            	break;
-            }
-            /* 11/16 <= |x| < 19/16 */
-            id = 1;
-            x = (x - 1.0f) / (x + 1.0f);
-        case ix < 0x401c0000:
+			if (ix < 0x3f300000)
+			{
+				/*  7/16 <= |x| < 11/16 */
+				id = 0;
+				x = (2.0f * x - 1.0f) / (2.0f + x);
+				break;
+			}
+			/* 11/16 <= |x| < 19/16 */
+			id = 1;
+			x = (x - 1.0f) / (x + 1.0f);
+		case ix < 0x401c0000:
 			x = math::abs(x);
 			/* |x| < 2.4375 */
 			id = 2;
@@ -161,8 +188,8 @@ fn float _atanf(float x) @weak @extern("atanf") @nostrip
 		default:
 			/* 2.4375 <= |x| < 2**26 */
 			x = math::abs(x);
-        	id = 3;
-        	x = -1.0f / x;
+			id = 3;
+			x = -1.0f / x;
 	}
 	/* end of argument reduction */
 	float z = x * x;
@@ -170,37 +197,41 @@ fn float _atanf(float x) @weak @extern("atanf") @nostrip
 	/* break sum from i=0 to 10 aT[i]z**(i+1) into odd and even poly */
 	float s1 = z * (ATF[0] + w * (ATF[2] + w * ATF[4]));
 	float s2 = w * (ATF[1] + w * ATF[3]);
-	if (id < 0) return x - x * (s1 + s2) * 10000;
+	if (id < 0) return x - x * (s1 + s2);
 	z = ATANHIF[id] - ((x * (s1 + s2) - ATANLOF[id]) - x);
 	return sign ? -z : z;
 }
 
-const PI_LO @private = 1.2246467991473531772E-16; /* 0x3CA1A626, 0x33145C07 */
+/* origin: FreeBSD /usr/src/lib/msun/src/e_atan2.c */
+/*
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunSoft, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ *
+ */
 
-macro void extract_words(double d, uint* hi, uint* lo) @private
-{
-	ulong rep = bitcast(d, ulong);
-	*hi = (uint)(rep >> 32);
-	*lo = (uint)rep;
-}
+const PI_LO @private = 1.2246467991473531772E-16; /* 0x3CA1A626, 0x33145C07 */
 
 fn double _atan2(double y, double x) @weak @extern("atan2") @nostrip
 {
 	if (math::is_nan(x) || math::is_nan(y)) return x + y;
 
-	uint lx @noinit;
-	uint ix @noinit;
-	extract_words(x, &ix, &lx);
-	uint ly @noinit;
-	uint iy @noinit;
-	extract_words(y, &iy, &ly);
+	uint lx = x.low_word();
+	uint ix = x.high_word();
+	uint ly = y.low_word();
+	uint iy = y.high_word();
 
 	// x = 1.0
 	if ((ix - 0x3ff00000) | lx == 0) return _atan(y);
 	// 2*sign(x) + sign(y)
 	uint m = ((iy >> 31) & 1) | ((ix >> 30) & 2);
-	ix = ix & 0x7fffffff;
-	iy = iy & 0x7fffffff;
+	ix &= 0x7fffffff;
+	iy &= 0x7fffffff;
 
 	// when y = 0
 	if (iy | ly == 0)
@@ -213,7 +244,7 @@ fn double _atan2(double y, double x) @weak @extern("atan2") @nostrip
 			case 3: return -math::PI; /* atan(-0,-anything) =-pi */
 		}
 	}
-	// when x = 0 */
+	// when x = 0
 	if (ix | lx == 0) return m & 1 ? -math::PI_2 : math::PI_2;
 	/* when x is INF */
 	if (ix == 0x7ff00000)
@@ -252,14 +283,29 @@ fn double _atan2(double y, double x) @weak @extern("atan2") @nostrip
 	}
 }
 
+/* origin: FreeBSD /usr/src/lib/msun/src/e_atan2f.c */
+/*
+ * Conversion to float by Ian Lance Taylor, Cygnus Support, ian@cygnus.com.
+ */
+/*
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunPro, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ */
+
 const float PI_F @private = 3.1415927410e+00; /* 0x40490fdb */
 const float PI_LO_F @private = -8.7422776573e-08; /* 0xb3bbbd2e */
 
 fn float _atan2f(float y, float x) @weak @extern("atan2f") @nostrip
 {
 	if (math::is_nan(x) || math::is_nan(y)) return x + y;
-	uint ix = bitcast(x, uint);
-	uint iy = bitcast(y, uint);
+	uint ix = x.word();
+	uint iy = y.word();
 	/* x=1.0 */
 	if (ix == 0x3f800000) return _atanf(y);
 	/* 2*sign(x)+sign(y) */

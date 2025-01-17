@@ -65,7 +65,7 @@ void llvm_emit_br(GenContext *c, LLVMBasicBlockRef next_block)
 
 void llvm_emit_block(GenContext *c, LLVMBasicBlockRef next_block)
 {
-	assert(c->current_block == NULL);
+	ASSERT0(c->current_block == NULL);
 	LLVMAppendExistingBasicBlock(c->cur_func.ref, next_block);
 	LLVMPositionBuilderAtEnd(c->builder, next_block);
 	c->current_block = next_block;
@@ -151,7 +151,7 @@ static inline void llvm_process_parameter_value(GenContext *c, Decl *decl, ABIAr
 			// Realign to best alignment.
 			if (pref_align > decl_alignment) decl_alignment = decl->alignment = pref_align;
 			AlignSize hi_offset = aligned_offset(llvm_store_size(c, lo), hi_alignment);
-			assert(hi_offset + llvm_store_size(c, hi) <= type_size(decl->type));
+			ASSERT0(hi_offset + llvm_store_size(c, hi) <= type_size(decl->type));
 
 			// Emit decl
 			llvm_emit_and_set_decl_alloca(c, decl);
@@ -258,7 +258,7 @@ static inline void llvm_process_parameter_value(GenContext *c, Decl *decl, ABIAr
 }
 static inline void llvm_emit_func_parameter(GenContext *context, Decl *decl, ABIArgInfo *abi_info, unsigned *index, unsigned real_index)
 {
-	assert(decl->decl_kind == DECL_VAR && decl->var.kind == VARDECL_PARAM);
+	ASSERT0(decl->decl_kind == DECL_VAR && decl->var.kind == VARDECL_PARAM);
 
 	// Allocate room on stack, but do not copy.
 	llvm_process_parameter_value(context, decl, abi_info, index);
@@ -307,7 +307,7 @@ void llvm_emit_return_abi(GenContext *c, BEValue *return_value, BEValue *optiona
 	{
 		if (return_value && return_value->type != type_void)
 		{
-			assert(return_value->value);
+			ASSERT0(return_value->value);
 			llvm_store_to_ptr_aligned(c, c->return_out, return_value, type_alloca_alignment(return_value->type));
 		}
 		return_out = c->optional_out;
@@ -318,12 +318,12 @@ void llvm_emit_return_abi(GenContext *c, BEValue *return_value, BEValue *optiona
 		}
 		return_value = optional;
 	}
-	assert(return_value || info->kind == ABI_ARG_IGNORE);
+	ASSERT0(return_value || info->kind == ABI_ARG_IGNORE);
 
 	switch (info->kind)
 	{
 		case ABI_ARG_INDIRECT:
-			assert(return_value);
+			ASSERT0(return_value);
 			llvm_store_to_ptr_aligned(c, return_out, return_value, info->indirect.alignment);
 			llvm_emit_return_value(c, NULL);
 			return;
@@ -405,10 +405,26 @@ void llvm_emit_function_body(GenContext *c, Decl *decl)
 {
 	DEBUG_LOG("Generating function %s.", decl->name);
 	if (decl->func_decl.attr_dynamic) vec_add(c->dynamic_functions, decl);
-	assert(decl->backend_ref);
-	if (decl->func_decl.attr_init || decl->func_decl.attr_finalizer)
+	ASSERT0(decl->backend_ref);
+	if (decl->func_decl.attr_init || (decl->func_decl.attr_finalizer && compiler.platform.object_format == OBJ_FORMAT_MACHO))
 	{
 		llvm_append_xxlizer(c, decl->func_decl.priority, decl->func_decl.attr_init, decl->backend_ref);
+	}
+	if (decl->func_decl.attr_finalizer && compiler.platform.object_format != OBJ_FORMAT_MACHO)
+	{
+		LLVMValueRef atexit = LLVMGetNamedFunction(c->module, "atexit");
+		if (!atexit) atexit = LLVMAddFunction(c->module, "atexit", c->atexit_type);
+		scratch_buffer_clear();
+		scratch_buffer_append(".__c3_atexit_");
+		scratch_buffer_set_extern_decl_name(decl, false);
+		LLVMValueRef func = LLVMAddFunction(c->module, scratch_buffer_to_string(), c->xtor_func_type);
+		llvm_set_weak(c, func);
+		LLVMBuilderRef builder = llvm_create_function_entry(c, func, NULL);
+		LLVMValueRef args[1] = { decl->backend_ref };
+		LLVMBuildCall2(builder, c->atexit_type, atexit, args, 1, "");
+		LLVMBuildRetVoid(builder);
+		LLVMDisposeBuilder(builder);
+		llvm_append_xxlizer(c, decl->func_decl.priority, true, func);
 	}
 	llvm_emit_body(c,
 	               decl->backend_ref,
@@ -421,7 +437,7 @@ void llvm_emit_function_body(GenContext *c, Decl *decl)
 void llvm_emit_body(GenContext *c, LLVMValueRef function, FunctionPrototype *prototype, Signature *signature, Ast *body,
                     Decl *decl)
 {
-	assert(prototype && function && body);
+	ASSERT0(prototype && function && body);
 	// Signature is NULL if the function is naked.
 
 	bool emit_debug = llvm_use_debug(c);
@@ -471,7 +487,7 @@ void llvm_emit_body(GenContext *c, LLVMValueRef function, FunctionPrototype *pro
 	}
 	if (prototype->ret_by_ref_abi_info)
 	{
-		assert(!c->return_out);
+		ASSERT0(!c->return_out);
 		c->return_out = llvm_get_next_param(c, &arg);
 	}
 
@@ -544,7 +560,7 @@ void llvm_emit_dynamic_functions(GenContext *c, Decl **funcs)
 {
 	size_t len = vec_size(funcs);
 	if (!len) return;
-	if (platform_target.object_format == OBJ_FORMAT_MACHO)
+	if (compiler.platform.object_format == OBJ_FORMAT_MACHO)
 	{
 		LLVMTypeRef types[3] = { c->ptr_type, c->ptr_type, c->typeid_type };
 		LLVMTypeRef entry_type = LLVMStructType(types, 3, false);
@@ -582,31 +598,60 @@ void llvm_emit_dynamic_functions(GenContext *c, Decl **funcs)
 		scratch_buffer_append("$ct.dyn.");
 		scratch_buffer_set_extern_decl_name(decl, false);
 		LLVMValueRef global = llvm_add_global_raw(c, scratch_buffer_copy(), c->dtable_type, 0);
+		llvm_set_weak(c, global);
 		Decl *proto = declptrzero(decl->func_decl.interface_method);
 		LLVMValueRef proto_ref = proto ? llvm_get_ref(c, proto) : llvm_get_selector(c, decl->name);
-		LLVMValueRef vals[3] = {llvm_get_ref(c, decl), proto_ref, LLVMConstNull(c->ptr_type)};
+
+		LLVMValueRef all_one_ptr = LLVMConstAllOnes(llvm_get_type(c, type_uptr));
+		all_one_ptr = LLVMBuildIntToPtr(builder, all_one_ptr, c->ptr_type, "");
+		LLVMValueRef vals[3] = {llvm_get_ref(c, decl), proto_ref, all_one_ptr};
 		LLVMSetInitializer(global, LLVMConstNamedStruct(c->dtable_type, vals, 3));
-		LLVMValueRef type_id_ptr = LLVMBuildIntToPtr(builder, llvm_get_typeid(c, type), c->ptr_type, "");
-		LLVMValueRef dtable_ref = LLVMBuildStructGEP2(builder, c->introspect_type, type_id_ptr, INTROSPECT_INDEX_DTABLE,
-		                                              "");
-		LLVMBasicBlockRef check = LLVMAppendBasicBlockInContext(c->context, initializer, "dtable_check");
-		LLVMBuildBr(builder, check);
+
+		LLVMBasicBlockRef check = llvm_basic_block_new(c, "dtable_check");
+		LLVMBasicBlockRef skip = llvm_basic_block_new(c, "dtable_skip");
+
+		LLVMValueRef check_ptr = LLVMBuildStructGEP2(builder, c->dtable_type, global, 2, "check_dtable_ref");
+		LLVMValueRef load_check = LLVMBuildLoad2(builder, c->ptr_type, check_ptr, "next_val");
+		LLVMBuildCondBr(builder, LLVMBuildICmp(builder, LLVMIntEQ, load_check, all_one_ptr, ""), check, skip);
+
+		LLVMAppendExistingBasicBlock(initializer, check);
 		LLVMPositionBuilderAtEnd(builder, check);
+
+		// Pointer to table
+		LLVMValueRef type_id_ptr = LLVMBuildIntToPtr(builder, llvm_get_typeid(c, type), c->ptr_type, "");
+		LLVMValueRef dtable_ref = LLVMBuildStructGEP2(builder, c->introspect_type, type_id_ptr, INTROSPECT_INDEX_DTABLE, "introspect_index");
+
+		// Phi is dtable**
 		LLVMValueRef phi = LLVMBuildPhi(builder, c->ptr_type, "dtable_ref");
+		LLVMAddIncoming(phi, &dtable_ref, &last_block, 1);
+
+		// Load Phi to dtable*
 		LLVMValueRef load_dtable = LLVMBuildLoad2(builder, c->ptr_type, phi, "dtable_ptr");
-		LLVMValueRef is_not_null = LLVMBuildICmp(builder, LLVMIntEQ, load_dtable, LLVMConstNull(c->ptr_type), "");
-		LLVMBasicBlockRef after_check = llvm_basic_block_new(c, "dtable_found");
-		LLVMBasicBlockRef next = llvm_basic_block_new(c, "dtable_next");
-		LLVMBuildCondBr(builder, is_not_null, after_check, next);
-		LLVMAppendExistingBasicBlock(initializer, next);
-		LLVMPositionBuilderAtEnd(builder, next);
+
+		// Check if null
+		LLVMValueRef is_null = LLVMBuildICmp(builder, LLVMIntEQ, load_dtable, LLVMConstNull(c->ptr_type), "");
 		LLVMValueRef next_ptr = LLVMBuildStructGEP2(builder, c->dtable_type, load_dtable, 2, "next_dtable_ref");
-		llvm_set_phi(phi, dtable_ref, last_block, next_ptr, next);
-		LLVMBuildBr(builder, check);
+		// Grab new pointer
+		LLVMAddIncoming(phi, &next_ptr, &check, 1);
+
+		LLVMBasicBlockRef after_check = llvm_basic_block_new(c, "dtable_found");
+		LLVMBuildCondBr(builder, is_null, after_check, check);
+
+		// We have a dtable** which points to a null
 		LLVMAppendExistingBasicBlock(initializer, after_check);
 		LLVMPositionBuilderAtEnd(builder, after_check);
+
+		// Store the global (dtable*) to the phi (dtable**)
 		LLVMBuildStore(builder, global, phi);
-		last_block = after_check;
+
+		// Clear the -1
+		LLVMBuildStore(builder, LLVMConstNull(c->ptr_type), check_ptr);
+
+		// Goto the skip
+		LLVMBuildBr(builder, skip);
+		LLVMAppendExistingBasicBlock(initializer, skip);
+		LLVMPositionBuilderAtEnd(builder, skip);
+		last_block = skip;
 	}
 
 	LLVMBuildRet(builder, NULL);
@@ -615,41 +660,19 @@ void llvm_emit_dynamic_functions(GenContext *c, Decl **funcs)
 
 void llvm_emit_function_decl(GenContext *c, Decl *decl)
 {
-	assert(decl->decl_kind == DECL_FUNC);
+	ASSERT0(decl->decl_kind == DECL_FUNC);
 	// Resolve function backend type for function.
 	decl_append_links_to_global(decl);
 	LLVMValueRef function = llvm_get_ref(c, decl);
 	decl->backend_ref = function;
-	if (decl->section_id)
+	if (decl->attrs_resolved && decl->attrs_resolved->section)
 	{
-		LLVMSetSection(function, section_from_id(decl->section_id));
+		LLVMSetSection(function, decl->attrs_resolved->section);
 	}
 	if (llvm_use_debug(c))
 	{
 		llvm_emit_debug_function(c, decl);
 	}
-
-	if (decl->is_extern)
-	{
-		if (decl->is_weak)
-		{
-			LLVMSetLinkage(function, LLVMExternalWeakLinkage);
-			llvm_set_comdat(c, function);
-		}
-		else
-		{
-			LLVMSetLinkage(function, LLVMExternalLinkage);
-		}
-		LLVMSetVisibility(function, LLVMDefaultVisibility);
-		return;
-	}
-	if (decl_is_local(decl))
-	{
-		LLVMSetLinkage(function, decl->is_weak ? LLVMLinkerPrivateWeakLinkage : LLVMInternalLinkage);
-		LLVMSetVisibility(function, LLVMDefaultVisibility);
-		return;
-	}
-	if (decl->is_weak) llvm_set_weak(c, function);
 }
 
 

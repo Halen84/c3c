@@ -1,12 +1,12 @@
 module std::core::array;
 import std::core::array::slice;
 
-/**
- * @param [in] array
- * @param [in] element
- * @return "the first index of the element"
- * @return! SearchResult.MISSING
- **/
+<*
+ @param [in] array
+ @param [in] element
+ @return "the first index of the element"
+ @return! SearchResult.MISSING
+*>
 macro index_of(array, element)
 {
 	foreach (i, &e : array)
@@ -16,25 +16,26 @@ macro index_of(array, element)
 	return SearchResult.MISSING?;
 }
 
-/**
- * @require @typekind(array) == VECTOR || @typekind(array) == ARRAY
- * @require @typekind(array[0]) == VECTOR || @typekind(array[0]) == ARRAY
- **/
-macro slice2d(array, x = 0, xlen = 0, y = 0, ylen = 0)
+<*
+ @require @typekind(array_ptr) == POINTER
+ @require @typekind(*array_ptr) == VECTOR || @typekind(*array_ptr) == ARRAY
+ @require @typekind((*array_ptr)[0]) == VECTOR || @typekind((*array_ptr)[0]) == ARRAY
+*>
+macro slice2d(array_ptr, x = 0, xlen = 0, y = 0, ylen = 0)
 {
-	if (xlen < 1) xlen = $typeof(array[0]).len + xlen;
-	if (ylen < 1) ylen = $typeof(array).len + ylen;
-	var $ElementType = $typeof(array[0][0]);
-	return Slice2d(<$ElementType>) { ($ElementType*)&array, $typeof(array[0]).len, y, ylen, x, xlen };
+	if (xlen < 1) xlen = $typeof((*array_ptr)[0]).len + xlen;
+	if (ylen < 1) ylen = $typeof((*array_ptr)).len + ylen;
+	var $ElementType = $typeof((*array_ptr)[0][0]);
+	return Slice2d(<$ElementType>) { ($ElementType*)array_ptr, $typeof((*array_ptr)[0]).len, y, ylen, x, xlen };
 }
 
 
-/**
- * @param [in] array
- * @param [in] element
- * @return "the last index of the element"
- * @return! SearchResult.MISSING
- **/
+<*
+ @param [in] array
+ @param [in] element
+ @return "the last index of the element"
+ @return! SearchResult.MISSING
+*>
 macro rindex_of(array, element)
 {
 	foreach_r (i, &e : array)
@@ -44,18 +45,18 @@ macro rindex_of(array, element)
 	return SearchResult.MISSING?;
 }
 
-/**
- * Concatenate two arrays or slices, returning a slice containing the concatenation of them.
- *
- * @param [in] arr1
- * @param [in] arr2
- * @param [&inout] allocator "The allocator to use, default is the heap allocator"
- * @require @typekind(arr1) == SLICE || @typekind(arr1) == ARRAY
- * @require @typekind(arr2) == SLICE || @typekind(arr2) == ARRAY
- * @require @typeis(arr1[0], $typeof(arr2[0])) "Arrays must have the same type"
- * @ensure result.len == arr1.len + arr2.len
- **/
-macro concat_new(arr1, arr2, Allocator allocator = allocator::heap())
+<*
+ Concatenate two arrays or slices, returning a slice containing the concatenation of them.
+
+ @param [in] arr1
+ @param [in] arr2
+ @param [&inout] allocator "The allocator to use, default is the heap allocator"
+ @require @typekind(arr1) == SLICE || @typekind(arr1) == ARRAY
+ @require @typekind(arr2) == SLICE || @typekind(arr2) == ARRAY
+ @require @typeis(arr1[0], $typeof(arr2[0])) "Arrays must have the same type"
+ @ensure result.len == arr1.len + arr2.len
+*>
+macro concat(arr1, arr2, Allocator allocator) @nodiscard
 {
 	var $Type = $typeof(arr1[0]);
 	$Type[] result = allocator::alloc_array(allocator, $Type, arr1.len + arr2.len);
@@ -69,19 +70,34 @@ macro concat_new(arr1, arr2, Allocator allocator = allocator::heap())
 	}
 	return result;
 }
+<*
+ Concatenate two arrays or slices, returning a slice containing the concatenation of them.
 
-/**
- * Concatenate two arrays or slices, returning a slice containing the concatenation of them,
- * allocated using the temp allocator.
- *
- * @param [in] arr1
- * @param [in] arr2
- * @require @typekind(arr1) == SLICE || @typekind(arr1) == ARRAY
- * @require @typekind(arr2) == SLICE || @typekind(arr2) == ARRAY
- * @require @typeis(arr1[0], $typeof(arr2[0])) "Arrays must have the same type"
- * @ensure result.len == arr1.len + arr2.len
- **/
-macro tconcat(arr1, arr2) => concat(arr1, arr2, allocator::temp());
+ @param [in] arr1
+ @param [in] arr2
+ @param [&inout] allocator "The allocator to use, default is the heap allocator"
+ @require @typekind(arr1) == SLICE || @typekind(arr1) == ARRAY
+ @require @typekind(arr2) == SLICE || @typekind(arr2) == ARRAY
+ @require @typeis(arr1[0], $typeof(arr2[0])) "Arrays must have the same type"
+ @ensure return.len == arr1.len + arr2.len
+*>
+macro concat_new(arr1, arr2, Allocator allocator = allocator::heap()) @nodiscard
+{
+	return concat(arr1, arr2, allocator);
+}
+
+<*
+ Concatenate two arrays or slices, returning a slice containing the concatenation of them,
+ allocated using the temp allocator.
+
+ @param [in] arr1
+ @param [in] arr2
+ @require @typekind(arr1) == SLICE || @typekind(arr1) == ARRAY
+ @require @typekind(arr2) == SLICE || @typekind(arr2) == ARRAY
+ @require @typeis(arr1[0], $typeof(arr2[0])) "Arrays must have the same type"
+ @ensure return.len == arr1.len + arr2.len
+*>
+macro tconcat(arr1, arr2) @nodiscard => concat(arr1, arr2, allocator::temp());
 
 module std::core::array::slice(<Type>);
 
@@ -127,18 +143,48 @@ macro void Slice2d.@each_ref(&self; @body(usz[<2>], Type*))
 	}
 }
 
-/**
- * @require idy >= 0 && idy < self.ylen
- **/
-macro Type[] Slice2d.get(self, usz idy) @operator([])
+<*
+ @require idy >= 0 && idy < self.ylen
+*>
+macro Type[] Slice2d.get_row(self, usz idy) @operator([])
 {
 	return (self.ptr + self.inner_len * (idy + self.ystart))[self.xstart:self.xlen];
 }
 
-/**
- * @require y >= 0 && y < self.ylen
- * @require x >= 0 && x < self.xlen
- **/
+macro Type Slice2d.get_coord(self, usz[<2>] coord)
+{
+	return *self.get_coord_ref(coord);
+}
+
+macro Type Slice2d.get_xy(self, x, y)
+{
+	return *self.get_xy_ref(x, y);
+}
+
+macro Type* Slice2d.get_xy_ref(self, x, y)
+{
+	return self.ptr + self.inner_len * (y + self.ystart) + self.xstart + x;
+}
+
+macro Type* Slice2d.get_coord_ref(self, usz[<2>] coord)
+{
+	return self.get_xy_ref(coord.x, coord.y);
+}
+
+macro void Slice2d.set_coord(self, usz[<2>] coord, Type value)
+{
+	*self.get_coord_ref(coord) = value;
+}
+
+macro void Slice2d.set_xy(self, x, y, Type value)
+{
+	*self.get_xy_ref(x, y) = value;
+}
+
+<*
+ @require y >= 0 && y < self.ylen
+ @require x >= 0 && x < self.xlen
+*>
 fn Slice2d Slice2d.slice(&self, isz x = 0, isz xlen = 0, isz y = 0, isz ylen = 0)
 {
 	if (xlen < 1) xlen = self.xlen + xlen;

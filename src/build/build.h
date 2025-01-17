@@ -3,20 +3,23 @@
 // Use of this source code is governed by the GNU LGPLv3.0 license
 // a copy of which can be found in the LICENSE file.
 
-#include "../version.h"
 #include "../utils/lib.h"
+#include "../version.h"
+#include <stdint.h>
 
-#define MAX_LIB_DIRS 1024
-#define MAX_FILES 2048
-#define MAX_INCLUDES 2048
+#define MAX_BUILD_LIB_DIRS 1024
+#define MAX_COMMAND_LINE_FILES 4096
+#define MAX_COMMAND_LINE_RUN_ARGS 2048
 #define MAX_THREADS 0xFFFF
 #define DEFAULT_SYMTAB_SIZE (256 * 1024)
 #define DEFAULT_SWITCHRANGE_MAX_SIZE (256)
+#define DEFAULT_PATH "."
 
 typedef enum
 {
-	BACKEND_LLVM = 1,
-	BACKEND_TB = 2
+	BACKEND_LLVM = 0,
+	BACKEND_TB = 1,
+	BACKEND_C = 2,
 } CompilerBackend;
 
 typedef enum
@@ -26,7 +29,6 @@ typedef enum
 	COMMAND_COMPILE_ONLY,
 	COMMAND_COMPILE_BENCHMARK,
 	COMMAND_COMPILE_TEST,
-	COMMAND_GENERATE_HEADERS,
 	COMMAND_INIT,
 	COMMAND_INIT_LIB,
 	COMMAND_BUILD,
@@ -44,11 +46,20 @@ typedef enum
 	COMMAND_TEST,
 	COMMAND_UNIT_TEST,
 	COMMAND_PRINT_SYNTAX,
+	COMMAND_PROJECT,
 } CompilerCommand;
 
 typedef enum
 {
-	DIAG_NONE = 0, // Don't use!
+	SUBCOMMAND_MISSING = 0,
+	SUBCOMMAND_VIEW,
+	SUBCOMMAND_ADD,
+	SUBCOMMAND_FETCH
+} ProjectSubcommand;
+
+typedef enum
+{
+	DIAG_NONE = 0,     // Don't use!
 	DIAG_WARNING_TYPE, // Don't use!
 	DIAG_UNUSED,
 	DIAG_UNUSED_PARAMETER,
@@ -124,10 +135,10 @@ typedef enum
 typedef enum
 {
 	OPTIMIZATION_NOT_SET = -1,
-	OPTIMIZATION_NONE = 0,          // -O0
-	OPTIMIZATION_LESS = 1,          // -O1
-	OPTIMIZATION_MORE = 2,          // -O2
-	OPTIMIZATION_AGGRESSIVE = 3,    // -O3
+	OPTIMIZATION_NONE = 0,       // -O0
+	OPTIMIZATION_LESS = 1,       // -O1
+	OPTIMIZATION_MORE = 2,       // -O2
+	OPTIMIZATION_AGGRESSIVE = 3, // -O3
 } OptimizationLevel;
 
 typedef enum
@@ -139,8 +150,16 @@ typedef enum
 
 typedef enum
 {
+	VALIDATION_NOT_SET = -1,
+	VALIDATION_LENIENT = 0,
+	VALIDATION_STRICT = 1,
+	VALIDATION_OBNOXIOUS = 2,
+} ValidationLevel;
+
+typedef enum
+{
 	SINGLE_MODULE_NOT_SET = -1,
-	SINGLE_MODULE_OFF = 0,          // NOLINT
+	SINGLE_MODULE_OFF = 0, // NOLINT
 	SINGLE_MODULE_ON = 1
 } SingleModule;
 
@@ -201,10 +220,17 @@ typedef enum
 
 typedef enum
 {
+	OLD_TEST_NOT_SET = -1,
+	OLD_TEST_OFF = 0,
+	OLD_TEST_ON = 1
+} OldTest;
+
+typedef enum
+{
 	SIZE_OPTIMIZATION_NOT_SET = -1,
-	SIZE_OPTIMIZATION_NONE = 0,     // None
-	SIZE_OPTIMIZATION_SMALL = 1,    // -Os
-	SIZE_OPTIMIZATION_TINY = 2,     // -Oz
+	SIZE_OPTIMIZATION_NONE = 0,  // None
+	SIZE_OPTIMIZATION_SMALL = 1, // -Os
+	SIZE_OPTIMIZATION_TINY = 2,  // -Oz
 } SizeOptimizationLevel;
 
 typedef enum
@@ -224,7 +250,7 @@ typedef enum
 typedef enum
 {
 	STRUCT_RETURN_DEFAULT = -1,
-	STRUCT_RETURN_STACK = 0,        // NOLINT
+	STRUCT_RETURN_STACK = 0, // NOLINT
 	STRUCT_RETURN_REG = 1
 } StructReturn;
 
@@ -282,7 +308,9 @@ typedef enum
 	WIN_CRT_DEFAULT = -1,
 	WIN_CRT_NONE = 0,
 	WIN_CRT_DYNAMIC = 1,
-	WIN_CRT_STATIC = 2,
+	WIN_CRT_DYNAMIC_DEBUG = 2,
+	WIN_CRT_STATIC = 3,
+	WIN_CRT_STATIC_DEBUG = 4,
 } WinCrtLinking;
 
 typedef enum
@@ -312,6 +340,7 @@ typedef enum
 typedef enum
 {
 	ARCH_OS_TARGET_DEFAULT = 0,
+	ANDROID_AARCH64,
 	ELF_AARCH64,
 	ELF_RISCV32,
 	ELF_RISCV64,
@@ -320,6 +349,7 @@ typedef enum
 	ELF_XTENSA,
 	FREEBSD_X86,
 	FREEBSD_X64,
+	IOS_AARCH64,
 	LINUX_AARCH64,
 	LINUX_RISCV32,
 	LINUX_RISCV64,
@@ -340,58 +370,115 @@ typedef enum
 	ARCH_OS_TARGET_LAST = WINDOWS_X64
 } ArchOsTarget;
 
+typedef enum
+{
+	SANITIZE_NOT_SET = -1,
+	SANITIZE_NONE,
+	SANITIZE_ADDRESS,
+	SANITIZE_MEMORY,
+	SANITIZE_THREAD,
+} SanitizeMode;
+
 #define ANY_WINDOWS_ARCH_OS WINDOWS_AARCH64: case WINDOWS_X64: case MINGW_X64
+
+typedef enum
+{
+	TARGET_TYPE_EXECUTABLE,
+	TARGET_TYPE_STATIC_LIB,
+	TARGET_TYPE_DYNAMIC_LIB,
+	TARGET_TYPE_OBJECT_FILES,
+	TARGET_TYPE_BENCHMARK,
+	TARGET_TYPE_TEST,
+	TARGET_TYPE_PREPARE,
+} TargetType;
+
+static const char *targets[7] = {
+		[TARGET_TYPE_EXECUTABLE] = "executable",
+		[TARGET_TYPE_STATIC_LIB] = "static-lib",
+		[TARGET_TYPE_DYNAMIC_LIB] = "dynamic-lib",
+		[TARGET_TYPE_BENCHMARK] = "benchmark",
+		[TARGET_TYPE_TEST] = "test",
+		[TARGET_TYPE_OBJECT_FILES] = "object-files",
+		[TARGET_TYPE_PREPARE] = "prepare",
+};
+static const char *target_desc[7] = {
+		[TARGET_TYPE_EXECUTABLE] = "Executable",
+		[TARGET_TYPE_STATIC_LIB] = "Static library",
+		[TARGET_TYPE_DYNAMIC_LIB] = "Dynamic library",
+		[TARGET_TYPE_BENCHMARK] = "benchmark suite",
+		[TARGET_TYPE_TEST] = "test suite",
+		[TARGET_TYPE_OBJECT_FILES] = "object files",
+		[TARGET_TYPE_PREPARE] = "prepare"
+
+};
+
 
 typedef struct BuildOptions_
 {
-	const char *lib_dir[MAX_LIB_DIRS];
-	int lib_dir_count;
-	const char *libs[MAX_LIB_DIRS];
-	int lib_count;
-	const char* linker_args[MAX_LIB_DIRS];
-	int linker_arg_count;
-	const char* linker_lib_dir[MAX_LIB_DIRS];
-	int linker_lib_dir_count;
-	const char* linker_libs[MAX_LIB_DIRS];
-	int linker_lib_count;
+	const char *lib_dir[MAX_BUILD_LIB_DIRS];
+	size_t lib_dir_count;
+	const char *libs[MAX_BUILD_LIB_DIRS];
+	size_t lib_count;
+	const char* linker_args[MAX_BUILD_LIB_DIRS];
+	size_t linker_arg_count;
+	const char* linker_lib_dir[MAX_BUILD_LIB_DIRS];
+	size_t linker_lib_dir_count;
+	const char* linker_libs[MAX_BUILD_LIB_DIRS];
+	size_t linker_lib_count;
 	const char* std_lib_dir;
 	VectorConv vector_conv;
-	struct {
+	struct
+	{
 		const char *sdk;
 		const char *def;
+		const char *vs_dirs;
 		WinCrtLinking crt_linking;
 	} win;
-	struct {
+	struct
+	{
 		const char *sysroot;
 		const char *min_version;
 		const char *sdk_version;
 	} macos;
-	struct {
+	struct
+	{
 		const char *crt;
 		const char *crtbegin;
 	} linuxpaths;
 	int build_threads;
 	const char **libraries_to_fetch;
 	const char **files;
+	const char **args;
 	const char **feature_names;
 	const char **removed_feature_names;
 	const char *output_name;
 	const char *project_name;
 	const char *target_select;
 	const char *path;
+	const char *vendor_download_path;
 	const char *template;
 	LinkerType linker_type;
+	ValidationLevel validation_level;
 	const char *custom_linker_path;
 	uint32_t symtab_size;
 	unsigned version;
+	bool silence_deprecation;
 	CompilerBackend backend;
 	CompilerCommand command;
+	struct
+	{
+		ProjectSubcommand command;
+		const char *target_name;
+		TargetType target_type;
+		const char **sources;
+	} project_options;
 	CompileOption compile_option;
 	TrustLevel trust_level;
 	DiagnosticsSeverity severity[DIAG_END_SENTINEL];
 	OptimizationSetting optsetting;
 	DebugInfo debug_info_override;
 	ShowBacktrace show_backtrace;
+	OldTest old_test;
 	ArchOsTarget arch_os_target_override;
 	SafetyLevel safety_level;
 	PanicLevel panic_level;
@@ -404,6 +491,7 @@ typedef struct BuildOptions_
 	bool emit_asm;
 	bool benchmark_mode;
 	bool test_mode;
+	bool lsp_mode;
 	bool no_entry;
 	bool no_obj;
 	bool no_headers;
@@ -411,6 +499,7 @@ typedef struct BuildOptions_
 	bool print_output;
 	bool print_input;
 	bool run_once;
+	int verbosity_level;
 	const char *panicfn;
 	const char *benchfn;
 	const char *testfn;
@@ -434,6 +523,7 @@ typedef struct BuildOptions_
 	SizeOptimizationLevel optsize;
 	RiscvFloatCapability riscv_float_capability;
 	MemoryEnvironment memory_environment;
+	SanitizeMode sanitize_mode;
 	bool print_keywords;
 	bool print_attributes;
 	bool print_builtins;
@@ -447,16 +537,6 @@ typedef struct BuildOptions_
 	bool testing;
 } BuildOptions;
 
-typedef enum
-{
-	TARGET_TYPE_EXECUTABLE,
-	TARGET_TYPE_STATIC_LIB,
-	TARGET_TYPE_DYNAMIC_LIB,
-	TARGET_TYPE_OBJECT_FILES,
-	TARGET_TYPE_BENCHMARK,
-	TARGET_TYPE_TEST,
-} TargetType;
-
 typedef struct
 {
 	struct Library__ *parent;
@@ -464,8 +544,10 @@ typedef struct
 	const char *cc;
 	const char *cflags;
 	WinCrtLinking win_crt;
+	const char **source_dirs;
 	const char **csource_dirs;
 	const char **csources;
+	const char **cinclude_dirs;
 	const char **execs;
 	const char **link_flags;
 	const char **linked_libs;
@@ -480,23 +562,27 @@ typedef struct Library__
 	const char **execs;
 	const char *cc;
 	const char *cflags;
+	const char **source_dirs;
 	const char **csource_dirs;
+	const char **cinclude_dirs;
 	WinCrtLinking win_crt;
 	LibraryTarget *target_used;
 	LibraryTarget **targets;
 } Library;
 
-
 typedef struct
 {
 	TargetType type;
 	Library **library_list;
-	LibraryTarget **ccompling_libraries;
+	LibraryTarget **ccompiling_libraries;
 	const char *name;
+	const char *output_name;
 	const char *version;
 	const char *langrev;
 	const char **source_dirs;
+	const char **test_source_dirs;
 	const char **sources;
+	const char **object_files;
 	const char **libdirs;
 	const char **libs;
 	const char **linker_libdirs;
@@ -515,6 +601,7 @@ typedef struct
 	bool generate_test_runner;
 	bool benchmark_output;
 	bool test_output;
+	bool lsp_output;
 	bool output_headers;
 	bool output_ast;
 	bool lex_only;
@@ -525,12 +612,15 @@ typedef struct
 	bool emit_object_files;
 	bool benchmarking;
 	bool testing;
+	bool silent;
 	bool read_stdin;
 	bool print_output;
-	bool print_input; 
+	bool print_input;
 	bool print_linking;
 	bool no_entry;
 	bool kernel_build;
+	bool silence_deprecation;
+	bool print_stats;
 	int build_threads;
 	TrustLevel trust_level;
 	OptimizationSetting optsetting;
@@ -539,10 +629,12 @@ typedef struct
 	MemoryEnvironment memory_environment;
 	SizeOptimizationLevel optsize;
 	SingleModule single_module;
+	ValidationLevel validation_level;
 	UseStdlib use_stdlib;
 	EmitStdlib emit_stdlib;
 	LinkLibc link_libc;
 	ShowBacktrace show_backtrace;
+	OldTest old_test;
 	StripUnused strip_unused;
 	DebugInfo debug_info;
 	MergeFunctions merge_functions;
@@ -555,6 +647,7 @@ typedef struct
 	LinkerType linker_type;
 	uint32_t symtab_size;
 	uint32_t switchrange_max_size;
+	const char **args;
 	const char *panicfn;
 	const char *benchfn;
 	const char *testfn;
@@ -562,6 +655,7 @@ typedef struct
 	const char *cflags;
 	const char **csource_dirs;
 	const char **csources;
+	const char **cinclude_dirs;
 	const char **exec;
 	const char **feature_list;
 	const char *custom_linker_path;
@@ -571,8 +665,11 @@ typedef struct
 		StructReturn x86_struct_return : 3;
 		X86VectorCapability x86_vector_capability : 4;
 		RiscvFloatCapability riscv_float_capability : 4;
-		bool trap_on_wrap : 1;
 		Win64Simd pass_win64_simd_as_arrays : 3;
+		bool trap_on_wrap : 1;
+		bool sanitize_address : 1;
+		bool sanitize_memory : 1;
+		bool sanitize_thread : 1;
 		FpOpt fp_math;
 		SafetyLevel safe_mode;
 		PanicLevel panic_level;
@@ -589,6 +686,7 @@ typedef struct
 	{
 		const char *sdk;
 		const char *def;
+		const char *vs_dirs;
 		WinCrtLinking crt_linking;
 		bool use_win_subsystem;
 	} win;
@@ -600,7 +698,7 @@ typedef struct
 } BuildTarget;
 
 static const char *x86_cpu_set[8] = {
-	[X86CPU_BASELINE] = "baseline",
+	[X86CPU_BASELINE] = "baseline", // NOLINT
 	[X86CPU_SSSE3] = "ssse3",
 	[X86CPU_SSE4] = "sse4",
 	[X86CPU_AVX1] = "avx1",
@@ -618,10 +716,12 @@ static BuildTarget default_build_target = {
 		.arch_os_target = ARCH_OS_TARGET_DEFAULT,
 		.debug_info = DEBUG_INFO_NOT_SET,
 		.show_backtrace = SHOW_BACKTRACE_NOT_SET,
+		.old_test = OLD_TEST_NOT_SET,
 		.use_stdlib = USE_STDLIB_NOT_SET,
 		.link_libc = LINK_LIBC_NOT_SET,
 		.emit_stdlib = EMIT_STDLIB_NOT_SET,
 		.linker_type = LINKER_TYPE_NOT_SET,
+		.validation_level = VALIDATION_NOT_SET,
 		.single_module = SINGLE_MODULE_NOT_SET,
 		.unroll_loops = UNROLL_LOOPS_NOT_SET,
 		.merge_functions = MERGE_FUNCTIONS_NOT_SET,
@@ -649,10 +749,25 @@ static BuildTarget default_build_target = {
 		.switchrange_max_size = DEFAULT_SWITCHRANGE_MAX_SIZE,
 };
 
+extern const char *project_default_keys[][2];
+extern const int project_default_keys_count;
+extern const char *project_target_keys[][2];
+extern const int project_target_keys_count;
+extern const char *manifest_default_keys[][2];
+extern const int manifest_default_keys_count;
+extern const char *manifest_target_keys[][2];
+extern const int manifest_target_keys_count;
+extern const char *arch_os_target[ARCH_OS_TARGET_LAST + 1];
+
 BuildOptions parse_arguments(int argc, const char *argv[]);
 ArchOsTarget arch_os_target_from_string(const char *target);
 bool command_accepts_files(CompilerCommand command);
-void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting level);
+bool command_passes_args(CompilerCommand command);
+void update_build_target_with_opt_level(BuildTarget *target,
+	OptimizationSetting level);
 void create_project(BuildOptions *build_options);
 void create_library(BuildOptions *build_options);
 void resolve_libraries(BuildTarget *build_target);
+void view_project(BuildOptions *build_options);
+void add_target_project(BuildOptions *build_options);
+void fetch_project(BuildOptions* options);

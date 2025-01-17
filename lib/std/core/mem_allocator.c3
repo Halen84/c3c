@@ -20,22 +20,22 @@ interface Allocator
 {
 	fn void reset(usz mark) @optional;
 	fn usz mark() @optional;
-	/**
-     * @require !alignment || math::is_power_of_2(alignment)
-     * @require alignment <= mem::MAX_MEMORY_ALIGNMENT `alignment too big`
-     * @require size > 0
-     **/
+	<*
+	 @require !alignment || math::is_power_of_2(alignment)
+	 @require alignment <= mem::MAX_MEMORY_ALIGNMENT `alignment too big`
+	 @require size > 0
+	*>
 	fn void*! acquire(usz size, AllocInitType init_type, usz alignment = 0);
-	/**
-     * @require !alignment || math::is_power_of_2(alignment)
-     * @require alignment <= mem::MAX_MEMORY_ALIGNMENT `alignment too big`
-     * @require ptr != null
-     * @require new_size > 0
-     **/
+	<*
+	 @require !alignment || math::is_power_of_2(alignment)
+	 @require alignment <= mem::MAX_MEMORY_ALIGNMENT `alignment too big`
+	 @require ptr != null
+	 @require new_size > 0
+	*>
 	fn void*! resize(void* ptr, usz new_size, usz alignment = 0);
-	/**
-     * @require ptr != null
-     **/
+	<*
+	 @require ptr != null
+	*>
 	fn void release(void* ptr, bool aligned);
 }
 
@@ -143,144 +143,144 @@ macro void free_aligned(Allocator allocator, void* ptr)
 	$if env::TESTING:
 	((char*)ptr)[0] = 0xBA;
 	$endif
-	allocator.release(ptr, .aligned = true);
+	allocator.release(ptr, aligned: true);
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_aligned' instead"
- * @require $vacount < 2 : "Too many arguments."
- * @require $or($vacount == 0, $assignable($vaexpr(0), $Type)) : "The second argument must be an initializer for the type"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_aligned' instead"
+ @require $vacount < 2 : "Too many arguments."
+ @require $vacount == 0 ||| $assignable($vaexpr[0], $Type) : "The second argument must be an initializer for the type"
+*>
 macro new(Allocator allocator, $Type, ...) @nodiscard
 {
 	$if $vacount == 0:
 		return ($Type*)calloc(allocator, $Type.sizeof);
 	$else
 		$Type* val = malloc(allocator, $Type.sizeof);
-		*val = $vaexpr(0);
+		*val = $vaexpr[0];
 		return val;
 	$endif
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_aligned' instead"
- * @require $vacount < 2 : "Too many arguments."
- * @require $or($vacount == 0, $assignable($vaexpr(0), $Type)) : "The second argument must be an initializer for the type"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_aligned' instead"
+ @require $vacount < 2 : "Too many arguments."
+ @require $vacount == 0 ||| $assignable($vaexpr[0], $Type) : "The second argument must be an initializer for the type"
+*>
 macro new_try(Allocator allocator, $Type, ...) @nodiscard
 {
 	$if $vacount == 0:
 		return ($Type*)calloc_try(allocator, $Type.sizeof);
 	$else
 		$Type* val = malloc_try(allocator, $Type.sizeof)!;
-		*val = $vaexpr(0);
+		*val = $vaexpr[0];
 		return val;
 	$endif
 }
 
-/**
- * Allocate using an aligned allocation. This is necessary for types with a default memory alignment
- * exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
- * @require $vacount < 2 : "Too many arguments."
- * @require $or($vacount == 0, $assignable($vaexpr(0), $Type)) : "The second argument must be an initializer for the type"
- **/
+<*
+ Allocate using an aligned allocation. This is necessary for types with a default memory alignment
+ exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
+ @require $vacount < 2 : "Too many arguments."
+ @require $vacount == 0 ||| $assignable($vaexpr[0], $Type) : "The second argument must be an initializer for the type"
+*>
 macro new_aligned($Type, ...) @nodiscard
 {
 	$if $vacount == 0:
 		return ($Type*)calloc_aligned(allocator, $Type.sizeof, $Type.alignof);
 	$else
 		$Type* val = malloc_aligned(allocator, $Type.sizeof, $Type.alignof);
-		*val = $vaexpr(0);
+		*val = $vaexpr[0];
 		return val;
 	$endif
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT
+*>
 macro new_with_padding(Allocator allocator, $Type, usz padding) @nodiscard
 {
 	return ($Type*)calloc_try(allocator, $Type.sizeof + padding);
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_aligned' instead"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_aligned' instead"
+*>
 macro alloc(Allocator allocator, $Type) @nodiscard
 {
 	return ($Type*)malloc(allocator, $Type.sizeof);
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_aligned' instead"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_aligned' instead"
+*>
 macro alloc_try(Allocator allocator, $Type) @nodiscard
 {
 	return ($Type*)malloc_try(allocator, $Type.sizeof);
 }
 
-/**
- * Allocate using an aligned allocation. This is necessary for types with a default memory alignment
- * exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
- **/
+<*
+ Allocate using an aligned allocation. This is necessary for types with a default memory alignment
+ exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
+*>
 macro alloc_aligned(Allocator allocator, $Type) @nodiscard
 {
 	return ($Type*)malloc_aligned(allocator, $Type.sizeof, $Type.alignof);
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT
+*>
 macro alloc_with_padding(Allocator allocator, $Type, usz padding) @nodiscard
 {
 	return ($Type*)malloc_try(allocator, $Type.sizeof + padding);
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_array_aligned' instead"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_array_aligned' instead"
+*>
 macro new_array(Allocator allocator, $Type, usz elements) @nodiscard
 {
 	return new_array_try(allocator, $Type, elements)!!;
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_array_aligned' instead"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'new_array_aligned' instead"
+*>
 macro new_array_try(Allocator allocator, $Type, usz elements) @nodiscard
 {
 	return (($Type*)calloc_try(allocator, $Type.sizeof * elements))[:elements];
 }
 
-/**
- * Allocate using an aligned allocation. This is necessary for types with a default memory alignment
- * exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
- **/
+<*
+ Allocate using an aligned allocation. This is necessary for types with a default memory alignment
+ exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
+*>
 macro new_array_aligned(Allocator allocator, $Type, usz elements) @nodiscard
 {
 	return (($Type*)calloc_aligned(allocator, $Type.sizeof * elements, $Type.alignof))[:elements]!!;
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_array_aligned' instead"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_array_aligned' instead"
+*>
 macro alloc_array(Allocator allocator, $Type, usz elements) @nodiscard
 {
 	return alloc_array_try(allocator, $Type, elements)!!;
 }
 
-/**
- * Allocate using an aligned allocation. This is necessary for types with a default memory alignment
- * exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
- **/
+<*
+ Allocate using an aligned allocation. This is necessary for types with a default memory alignment
+ exceeding DEFAULT_MEM_ALIGNMENT. IMPORTANT! It must be freed using free_aligned.
+*>
 macro alloc_array_aligned(Allocator allocator, $Type, usz elements) @nodiscard
 {
 	return (($Type*)malloc_aligned(allocator, $Type.sizeof * elements, $Type.alignof))[:elements]!!;
 }
 
-/**
- * @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_array_aligned' instead"
- **/
+<*
+ @require $Type.alignof <= mem::DEFAULT_MEM_ALIGNMENT : "Types with alignment exceeding the default must use 'alloc_array_aligned' instead"
+*>
 macro alloc_array_try(Allocator allocator, $Type, usz elements) @nodiscard
 {
 	return (($Type*)malloc_try(allocator, $Type.sizeof * elements))[:elements];
@@ -300,11 +300,11 @@ fn any clone_any(Allocator allocator, any value) @nodiscard
 }
 
 
-/**
- * @require bytes > 0
- * @require alignment > 0
- * @require bytes <= isz.max
- **/
+<*
+ @require bytes > 0
+ @require alignment > 0
+ @require bytes <= isz.max
+*>
 macro void*! @aligned_alloc(#alloc_fn, usz bytes, usz alignment)
 {
 	if (alignment < void*.alignof) alignment = void*.alignof;
@@ -338,10 +338,10 @@ macro void! @aligned_free(#free_fn, void* old_pointer)
 	$endif
 }
 
-/**
- * @require bytes > 0
- * @require alignment > 0
- **/
+<*
+ @require bytes > 0
+ @require alignment > 0
+*>
 macro void*! @aligned_realloc(#calloc_fn, #free_fn, void* old_pointer, usz bytes, usz alignment)
 {
 	AlignedBlock* desc = (AlignedBlock*)old_pointer - 1;
@@ -358,10 +358,22 @@ macro void*! @aligned_realloc(#calloc_fn, #free_fn, void* old_pointer, usz bytes
 
 
 // All allocators
-tlocal Allocator thread_allocator @private = &allocator::LIBC_ALLOCATOR;
+
+
+tlocal Allocator thread_allocator @private = base_allocator();
+Allocator temp_base_allocator @private = base_allocator();
+
 tlocal TempAllocator* thread_temp_allocator @private = null;
 tlocal TempAllocator*[2] temp_allocator_pair @private;
-Allocator temp_base_allocator @private = &allocator::LIBC_ALLOCATOR;
+
+macro Allocator base_allocator() @private
+{
+	$if env::LIBC:
+		return &allocator::LIBC_ALLOCATOR;
+	$else
+		return &allocator::NULL_ALLOCATOR;
+	$endif
+}
 
 macro TempAllocator* create_default_sized_temp_allocator(Allocator allocator) @local
 {
@@ -395,6 +407,23 @@ fn void init_default_temp_allocators() @private
 	thread_temp_allocator = temp_allocator_pair[0];
 }
 
+fn void destroy_temp_allocators_after_exit() @finalizer(65535) @local @if(env::LIBC)
+{
+	destroy_temp_allocators();
+}
+
+<*
+ Call this to destroy any memory used by the temp allocators. This will invalidate all temp memory.
+*>
+fn void destroy_temp_allocators()
+{
+	if (!thread_temp_allocator) return;
+	temp_allocator_pair[0].destroy();
+	temp_allocator_pair[1].destroy();
+	temp_allocator_pair[..] = null;
+	thread_temp_allocator = null;
+}
+
 fn TempAllocator* temp_allocator_next() @private
 {
 	if (!thread_temp_allocator)
@@ -405,3 +434,21 @@ fn TempAllocator* temp_allocator_next() @private
 	usz index = thread_temp_allocator == temp_allocator_pair[0] ? 1 : 0;
 	return thread_temp_allocator = temp_allocator_pair[index];
 }
+
+const NullAllocator NULL_ALLOCATOR = {};
+distinct NullAllocator (Allocator) = uptr;
+
+fn void*! NullAllocator.acquire(&self, usz bytes, AllocInitType init_type, usz alignment) @dynamic
+{
+	return AllocationFailure.OUT_OF_MEMORY?;
+}
+
+fn void*! NullAllocator.resize(&self, void* old_ptr, usz new_bytes, usz alignment) @dynamic
+{
+	return AllocationFailure.OUT_OF_MEMORY?;
+}
+
+fn void NullAllocator.release(&self, void* old_ptr, bool aligned) @dynamic
+{
+}
+

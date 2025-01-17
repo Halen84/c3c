@@ -49,10 +49,19 @@ static void diagnostics_handler(LLVMDiagnosticInfoRef ref, void *context)
 	LLVMDisposeMessage(message);
 }
 
+bool module_should_weaken(Module *module)
+{
+	if (module->generic_module) return true;
+	Module *top = module->top_module;
+	return top && (top->name->module == kw_std || top->name->module == kw_libc);
+}
+
 static void gencontext_init(GenContext *context, Module *module, LLVMContextRef shared_context)
 {
-	assert(LLVMIsMultithreaded());
+	ASSERT0(LLVMIsMultithreaded());
 	memset(context, 0, sizeof(GenContext));
+	context->weaken = module_should_weaken(module);
+
 	if (shared_context)
 	{
 		context->shared_context = true;
@@ -66,13 +75,13 @@ static void gencontext_init(GenContext *context, Module *module, LLVMContextRef 
 	{
 		LLVMContextSetDiagnosticHandler(context->context, &diagnostics_handler, context);
 	}
-	if (!active_target.emit_llvm && !active_target.test_output && !active_target.benchmark_output ) LLVMContextSetDiscardValueNames(context->context, true);
+	if (!compiler.build.emit_llvm && !compiler.build.test_output && !compiler.build.benchmark_output ) LLVMContextSetDiscardValueNames(context->context, true);
 	context->code_module = module;
 }
 
 static void gencontext_destroy(GenContext *context)
 {
-	assert(llvm_is_global_eval(context));
+	ASSERT0(llvm_is_global_eval(context));
 	LLVMDisposeBuilder(context->global_builder);
 	if (!context->shared_context) LLVMContextDispose(context->context);
 	LLVMDisposeTargetData(context->target_data);
@@ -83,7 +92,7 @@ static void gencontext_destroy(GenContext *context)
 LLVMBuilderRef llvm_create_builder(GenContext *c)
 {
 	LLVMBuilderRef builder = LLVMCreateBuilderInContext(c->context);
-	LLVMBuilderSetFastMathFlags(builder, (FastMathOption)active_target.feature.fp_math);
+	LLVMBuilderSetFastMathFlags(builder, (FastMathOption)compiler.build.feature.fp_math);
 	return builder;
 }
 
@@ -121,8 +130,7 @@ LLVMValueRef llvm_get_selector(GenContext *c, const char *name)
 	LLVMValueRef selector = llvm_add_global_raw(c, sel_name, char_array_type, 0);
 	LLVMSetGlobalConstant(selector, 1);
 	LLVMSetInitializer(selector, llvm_get_zstring(c, name, name_len));
-	LLVMSetLinkage(selector, LLVMLinkOnceODRLinkage);
-	llvm_set_comdat(c, selector);
+	llvm_set_selector_linkage(c, selector);
 	return selector;
 }
 
@@ -166,7 +174,7 @@ static LLVMValueRef llvm_emit_macho_xtor(GenContext *c, LLVMValueRef *list, cons
 
 void llvm_emit_constructors_and_destructors(GenContext *c)
 {
-	if (platform_target.object_format == OBJ_FORMAT_MACHO)
+	if (compiler.platform.object_format == OBJ_FORMAT_MACHO)
 	{
 
 		LLVMValueRef c3_dynamic = LLVMGetNamedGlobal(c->module, "$c3_dynamic");
@@ -221,6 +229,7 @@ static LLVMValueRef llvm_emit_const_array_padding(LLVMTypeRef element_type, Inde
 
 LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_init)
 {
+	ASSERT0(const_init->type == type_flatten(const_init->type));
 	switch (const_init->kind)
 	{
 		case CONST_INIT_ZERO:
@@ -229,14 +238,15 @@ LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_
 			UNREACHABLE
 		case CONST_INIT_ARRAY_FULL:
 		{
+			ASSERT(const_init, const_init->type->type_kind != TYPE_SLICE);
 			bool was_modified = false;
 			Type *array_type = const_init->type;
 			Type *element_type = array_type->array.base;
 			LLVMTypeRef element_type_llvm = llvm_get_type(c, element_type);
 			ConstInitializer **elements = const_init->init_array_full;
-			assert(array_type->type_kind == TYPE_ARRAY || array_type->type_kind == TYPE_VECTOR);
+			ASSERT(const_init, array_type->type_kind == TYPE_ARRAY || array_type->type_kind == TYPE_VECTOR);
 			ArraySize size = array_type->array.len;
-			assert(size > 0);
+			ASSERT(const_init, size > 0);
 			LLVMValueRef *parts = VECNEW(LLVMValueRef, size);
 			for (ArrayIndex i = 0; i < (ArrayIndex)size; i++)
 			{
@@ -257,20 +267,21 @@ LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_
 
 		case CONST_INIT_ARRAY:
 		{
+			ASSERT(const_init, const_init->type->type_kind != TYPE_SLICE);
 			bool was_modified = false;
 			Type *array_type = const_init->type;
 			Type *element_type = array_type->array.base;
 			LLVMTypeRef element_type_llvm = llvm_get_type(c, element_type);
 			AlignSize expected_align = llvm_abi_alignment(c, element_type_llvm);
 			ConstInitializer **elements = const_init->init_array.elements;
-			assert(vec_size(elements) > 0 && "Array should always have gotten at least one element.");
+			ASSERT(const_init, vec_size(elements) > 0 && "Array should always have gotten at least one element.");
 			ArrayIndex current_index = 0;
 			unsigned alignment = 0;
 			LLVMValueRef *parts = NULL;
 			bool pack = false;
 			FOREACH(ConstInitializer *, element, elements)
 			{
-				assert(element->kind == CONST_INIT_ARRAY_VALUE);
+				ASSERT0(element->kind == CONST_INIT_ARRAY_VALUE);
 				ArrayIndex element_index = element->init_array_value.index;
 				IndexDiff diff = element_index - current_index;
 				if (alignment && expected_align != alignment)
@@ -365,7 +376,7 @@ LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_
 				LLVMTypeRef expected_type = llvm_get_type(c, const_init->init_struct[i]->type);
 				LLVMValueRef element = llvm_emit_const_initializer(c, const_init->init_struct[i]);
 				LLVMTypeRef element_type = LLVMTypeOf(element);
-				assert(LLVMIsConstant(element));
+				//ASSERT0(LLVMIsConstant(element));
 				if (expected_type != element_type)
 				{
 					was_modified = true;
@@ -402,7 +413,7 @@ LLVMValueRef llvm_emit_const_initializer(GenContext *c, ConstInitializer *const_
 		case CONST_INIT_VALUE:
 		{
 			BEValue value;
-			llvm_emit_expr(c, &value, const_init->init_value);
+			llvm_emit_expr_global_value(c, &value, const_init->init_value);
 			return llvm_load_value_store(c, &value);
 		}
 	}
@@ -455,19 +466,74 @@ void llvm_set_global_tls(Decl *decl)
 		LLVMSetThreadLocalMode(optional_ref, thread_local_mode);
 	}
 }
+
+void llvm_set_weak(GenContext *c, LLVMValueRef global)
+{
+	LLVMSetLinkage(global, compiler.platform.os == OS_TYPE_WIN32 ? LLVMWeakODRLinkage : LLVMWeakAnyLinkage);
+	LLVMSetVisibility(global, LLVMDefaultVisibility);
+	llvm_set_comdat(c, global);
+}
+
+static void llvm_set_external_reference(GenContext *c, LLVMValueRef ref, bool is_weak)
+{
+	if (compiler.platform.os == OS_TYPE_WIN32) is_weak = false;
+	LLVMSetLinkage(ref, is_weak ? LLVMExternalWeakLinkage : LLVMExternalLinkage);
+	LLVMSetVisibility(ref, LLVMDefaultVisibility);
+}
+
+void llvm_set_decl_linkage(GenContext *c, Decl *decl)
+{
+	bool is_var = decl->decl_kind == DECL_VAR;
+	bool is_weak = decl->is_weak;
+	bool should_weaken = is_weak || (!decl->is_extern && module_should_weaken(decl->unit->module));
+	LLVMValueRef ref = decl->backend_ref;
+	LLVMValueRef opt_ref = is_var ? decl->var.optional_ref : NULL;
+	bool is_static = is_var && decl->var.is_static;
+	// Static variables in a different modules should be copied to the current module.
+	bool same_module = is_static || decl->unit->module == c->code_module;
+	if (decl->is_extern || !same_module)
+	{
+		llvm_set_external_reference(c, ref, should_weaken);
+		if (opt_ref) llvm_set_external_reference(c, opt_ref, should_weaken);
+		return;
+	}
+	if (decl_is_externally_visible(decl) && !is_static)
+	{
+		if (decl->is_export && compiler.platform.os == OS_TYPE_WIN32  && !compiler.build.win.def && decl->name != kw_main && decl->name != kw_mainstub)
+		{
+			LLVMSetDLLStorageClass(ref, LLVMDLLExportStorageClass);
+		}
+		if (should_weaken)
+		{
+			llvm_set_weak(c, ref);
+			if (opt_ref) llvm_set_weak(c, opt_ref);
+			return;
+		}
+		LLVMSetVisibility(ref, LLVMDefaultVisibility);
+		if (opt_ref) LLVMSetVisibility(opt_ref, LLVMDefaultVisibility);
+		return;
+	}
+
+	LLVMSetLinkage(ref, decl->is_weak ? LLVMLinkerPrivateWeakLinkage : LLVMInternalLinkage);
+	if (opt_ref) LLVMSetLinkage(opt_ref, LLVMInternalLinkage);
+}
+
 void llvm_set_internal_linkage(LLVMValueRef alloc)
 {
 	LLVMSetLinkage(alloc, LLVMInternalLinkage);
 	LLVMSetVisibility(alloc, LLVMDefaultVisibility);
 }
-void llvm_set_private_linkage(LLVMValueRef alloc)
+
+void llvm_set_private_declaration(LLVMValueRef alloc)
 {
 	LLVMSetLinkage(alloc, LLVMPrivateLinkage);
 	LLVMSetVisibility(alloc, LLVMDefaultVisibility);
+	LLVMSetUnnamedAddress(alloc, LLVMGlobalUnnamedAddr);
 }
+
 void llvm_emit_global_variable_init(GenContext *c, Decl *decl)
 {
-	assert(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST || decl->var.is_static);
+	ASSERT0(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST || decl->var.is_static);
 
 	// Skip real constants.
 	if (!decl->type) return;
@@ -491,13 +557,14 @@ void llvm_emit_global_variable_init(GenContext *c, Decl *decl)
 	{
 		if (expr_is_const_initializer(init_expr))
 		{
+			ASSERT0(type_flatten(init_expr->type)->type_kind != TYPE_SLICE);
 			ConstInitializer *list = init_expr->const_expr.initializer;
 			init_value = llvm_emit_const_initializer(c, list);
 		}
 		else
 		{
 			BEValue value;
-			llvm_emit_expr(c, &value, init_expr);
+			llvm_emit_expr_global_value(c, &value, init_expr);
 			init_value = llvm_load_value_store(c, &value);
 		}
 	}
@@ -540,9 +607,9 @@ void llvm_emit_global_variable_init(GenContext *c, Decl *decl)
 		LLVMSetUnnamedAddress(decl->backend_ref,
 							  decl_is_local(decl) ? LLVMGlobalUnnamedAddr : LLVMLocalUnnamedAddr);
 	}
-	if (decl->section_id)
+	if (decl->attrs_resolved && decl->attrs_resolved->section)
 	{
-		LLVMSetSection(global_ref, section_from_id(decl->section_id));
+		LLVMSetSection(global_ref, decl->attrs_resolved->section);
 	}
 	llvm_set_global_tls(decl);
 
@@ -556,9 +623,9 @@ void llvm_emit_global_variable_init(GenContext *c, Decl *decl)
 	if (init_expr && IS_OPTIONAL(init_expr) && init_expr->expr_kind == EXPR_OPTIONAL)
 	{
 		Expr *inner = init_expr->inner_expr;
-		assert(expr_is_const(inner) && inner->const_expr.const_kind == CONST_ERR);
+		ASSERT0(expr_is_const(inner) && inner->const_expr.const_kind == CONST_ERR);
 		BEValue value;
-		llvm_emit_expr(c, &value, inner);
+		llvm_emit_expr_global_value(c, &value, inner);
 		optional_value = llvm_load_value_store(c, &value);
 	}
 	if (!decl->is_extern)
@@ -572,22 +639,6 @@ void llvm_emit_global_variable_init(GenContext *c, Decl *decl)
 
 	LLVMSetGlobalConstant(global_ref, decl->var.kind == VARDECL_CONST);
 
-	if (decl->is_extern)
-	{
-		LLVMSetLinkage(global_ref, LLVMExternalLinkage);
-		if (optional_ref) LLVMSetLinkage(optional_ref, LLVMExternalLinkage);
-	}
-	else if (decl_is_externally_visible(decl) && !decl->var.is_static)
-	{
-		LLVMSetVisibility(global_ref, LLVMDefaultVisibility);
-		if (optional_ref) LLVMSetVisibility(optional_ref, LLVMDefaultVisibility);
-	}
-	else
-	{
-		LLVMSetLinkage(global_ref, LLVMInternalLinkage);
-		if (optional_ref) LLVMSetLinkage(optional_ref, LLVMInternalLinkage);
-	}
-
 	decl->backend_ref = global_ref;
 	if (old)
 	{
@@ -595,16 +646,18 @@ void llvm_emit_global_variable_init(GenContext *c, Decl *decl)
 		LLVMDeleteGlobal(old);
 	}
 
+	llvm_set_decl_linkage(c, decl);
+
 }
 static void gencontext_verify_ir(GenContext *context)
 {
 	char *error = NULL;
-	assert(context->module);
+	ASSERT0(context->module);
 	if (LLVMVerifyModule(context->module, LLVMPrintMessageAction, &error))
 	{
 		if (*error)
 		{
-			puts("IR integrity failure.");
+			eprintf("----------------------------------IR integrity failure:\n");
 			LLVMDumpModule(context->module);
 			error_exit("Could not verify IR: %s", error);
 		}
@@ -616,8 +669,8 @@ static void gencontext_verify_ir(GenContext *context)
 static void gencontext_emit_object_file(GenContext *context)
 {
 	char *err = "";
-	DEBUG_LOG("Target: %s", platform_target.target_triple);
-	LLVMSetTarget(context->module, platform_target.target_triple);
+	DEBUG_LOG("Target: %s", compiler.platform.target_triple);
+	LLVMSetTarget(context->module, compiler.platform.target_triple);
 	char *layout = LLVMCopyStringRepOfTargetData(context->target_data);
 	LLVMSetDataLayout(context->module, layout);
 	LLVMDisposeMessage(layout);
@@ -642,8 +695,8 @@ static void gencontext_emit_object_file(GenContext *context)
 static void llvm_emit_asm_file(GenContext *context)
 {
 	char *err = "";
-	DEBUG_LOG("Target: %s", platform_target.target_triple);
-	LLVMSetTarget(context->module, platform_target.target_triple);
+	DEBUG_LOG("Target: %s", compiler.platform.target_triple);
+	LLVMSetTarget(context->module, compiler.platform.target_triple);
 	char *layout = LLVMCopyStringRepOfTargetData(context->target_data);
 	LLVMSetDataLayout(context->module, layout);
 	LLVMDisposeMessage(layout);
@@ -667,11 +720,12 @@ void gencontext_print_llvm_ir(GenContext *context)
 
 LLVMValueRef llvm_emit_alloca(GenContext *c, LLVMTypeRef type, unsigned alignment, const char *name)
 {
-	assert(!llvm_is_global_eval(c));
-	assert(alignment > 0);
+	ASSERT0(LLVMGetTypeKind(type) != LLVMVoidTypeKind);
+	ASSERT0(!llvm_is_global_eval(c));
+	ASSERT0(alignment > 0);
 	LLVMBasicBlockRef current_block = LLVMGetInsertBlock(c->builder);
 	LLVMPositionBuilderBefore(c->builder, c->alloca_point);
-	assert(LLVMGetTypeContext(type) == c->context);
+	ASSERT0(LLVMGetTypeContext(type) == c->context);
 	LLVMValueRef alloca = LLVMBuildAlloca(c->builder, type, name);
 	llvm_set_alignment(alloca, alignment);
 	LLVMPositionBuilderAtEnd(c->builder, current_block);
@@ -687,13 +741,13 @@ void llvm_emit_and_set_decl_alloca(GenContext *c, Decl *decl)
 {
 	Type *type = type_lowering(decl->type);
 	if (type == type_void) return;
-	assert(!decl->backend_ref && !decl->is_value);
+	ASSERT0(!decl->backend_ref && !decl->is_value);
 	decl->backend_ref = llvm_emit_alloca(c, llvm_get_type(c, type), decl->alignment, decl->name ? decl->name : ".anon");
 }
 
 void llvm_emit_local_var_alloca(GenContext *c, Decl *decl)
 {
-	assert(!decl->var.is_static && decl->var.kind != VARDECL_CONST);
+	ASSERT0(!decl->var.is_static && decl->var.kind != VARDECL_CONST);
 	llvm_emit_and_set_decl_alloca(c, decl);
 	if (llvm_use_debug(c))
 	{
@@ -840,6 +894,9 @@ static void llvm_codegen_setup()
 	attribute_id.optnone = lookup_attribute("optnone");
 	attribute_id.readonly = lookup_attribute("readonly");
 	attribute_id.reassoc = lookup_attribute("reassoc");
+	attribute_id.sanitize_address = lookup_attribute("sanitize_address");
+	attribute_id.sanitize_memory = lookup_attribute("sanitize_memory");
+	attribute_id.sanitize_thread = lookup_attribute("sanitize_thread");
 	attribute_id.sext = lookup_attribute("signext");
 	attribute_id.sret = lookup_attribute("sret");
 	attribute_id.ssp = lookup_attribute("ssp");
@@ -852,10 +909,17 @@ static void llvm_codegen_setup()
 
 void llvm_set_comdat(GenContext *c, LLVMValueRef global)
 {
-	if (!platform_target.use_comdat) return;
+	if (!compiler.platform.use_comdat) return;
 	LLVMComdatRef comdat = LLVMGetOrInsertComdat(c->module, LLVMGetValueName(global));
 	LLVMSetComdatSelectionKind(comdat, LLVMAnyComdatSelectionKind);
 	LLVMSetComdat(global, comdat);
+}
+
+void llvm_set_selector_linkage(GenContext *c, LLVMValueRef selector)
+{
+	LLVMSetVisibility(selector, LLVMDefaultVisibility);
+	LLVMSetLinkage(selector, LLVMLinkOnceODRLinkage);
+	llvm_set_comdat(c, selector);
 }
 
 void llvm_set_linkonce(GenContext *c, LLVMValueRef global)
@@ -864,14 +928,6 @@ void llvm_set_linkonce(GenContext *c, LLVMValueRef global)
 	LLVMSetVisibility(global, LLVMDefaultVisibility);
 	llvm_set_comdat(c, global);
 }
-
-void llvm_set_weak(GenContext *c, LLVMValueRef global)
-{
-	LLVMSetLinkage(global, LLVMWeakAnyLinkage);
-	LLVMSetVisibility(global, LLVMDefaultVisibility);
-	llvm_set_comdat(c, global);
-}
-
 
 void llvm_value_set_int(GenContext *c, BEValue *value, Type *type, uint64_t i)
 {
@@ -952,7 +1008,7 @@ static inline void llvm_optimize(GenContext *c)
 #endif
 	LLVMOptLevels level = LLVM_O0;
 
-	switch (active_target.optsize)
+	switch (compiler.build.optsize)
 	{
 		case SIZE_OPTIMIZATION_SMALL:
 			level = LLVM_Os;
@@ -961,7 +1017,7 @@ static inline void llvm_optimize(GenContext *c)
 			level = LLVM_Oz;
 			break;
 		default:
-			switch (active_target.optlevel)
+			switch (compiler.build.optlevel)
 			{
 				case OPTIMIZATION_NONE:
 				case OPTIMIZATION_NOT_SET:
@@ -981,14 +1037,17 @@ static inline void llvm_optimize(GenContext *c)
 	}
 	LLVMPasses passes = {
 			.opt_level = level,
-			.should_verify = active_target.emit_llvm,
+			.should_verify = compiler.build.emit_llvm,
 			.should_debug = should_debug,
-			.is_kernel = active_target.kernel_build,
-			.opt.vectorize_loops = active_target.loop_vectorization == VECTORIZATION_ON,
-			.opt.slp_vectorize = active_target.slp_vectorization == VECTORIZATION_ON,
-			.opt.unroll_loops = active_target.unroll_loops == UNROLL_LOOPS_ON,
-			.opt.interleave_loops = active_target.unroll_loops == UNROLL_LOOPS_ON,
-			.opt.merge_functions = active_target.merge_functions == MERGE_FUNCTIONS_ON
+			.is_kernel = compiler.build.kernel_build,
+			.opt.vectorize_loops = compiler.build.loop_vectorization == VECTORIZATION_ON,
+			.opt.slp_vectorize = compiler.build.slp_vectorization == VECTORIZATION_ON,
+			.opt.unroll_loops = compiler.build.unroll_loops == UNROLL_LOOPS_ON,
+			.opt.interleave_loops = compiler.build.unroll_loops == UNROLL_LOOPS_ON,
+			.opt.merge_functions = compiler.build.merge_functions == MERGE_FUNCTIONS_ON,
+			.sanitizer.address_sanitize = compiler.build.feature.sanitize_address,
+			.sanitizer.mem_sanitize = compiler.build.feature.sanitize_memory,
+			.sanitizer.thread_sanitize = compiler.build.feature.sanitize_thread
 	};
 	if (!llvm_run_passes(c->module, c->machine, &passes))
 	{
@@ -1002,20 +1061,20 @@ const char *llvm_codegen(void *context)
 	llvm_optimize(c);
 
 	// Serialize the LLVM IR, if requested, also verify the IR in this case
-	if (active_target.emit_llvm)
+	if (compiler.build.emit_llvm)
 	{
 		gencontext_print_llvm_ir(c);
 		gencontext_verify_ir(c);
 	}
 
 	const char *object_name = NULL;
-	if (active_target.emit_object_files)
+	if (compiler.build.emit_object_files)
 	{
 		gencontext_emit_object_file(c);
 		object_name = c->object_filename;
 	}
 
-	if (active_target.emit_asm)
+	if (compiler.build.emit_asm)
 	{
 		llvm_emit_asm_file(context);
 	}
@@ -1029,9 +1088,9 @@ const char *llvm_codegen(void *context)
 
 void llvm_add_global_decl(GenContext *c, Decl *decl)
 {
-	assert(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST);
+	ASSERT0(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST);
 
-	bool same_module = decl_module(decl) == c->code_module;
+	bool same_module = decl->unit->module == c->code_module;
 	LLVMTypeRef type = llvm_get_type(c, decl->type);
 	if (same_module)
 	{
@@ -1042,10 +1101,6 @@ void llvm_add_global_decl(GenContext *c, Decl *decl)
 	{
 		scratch_buffer_set_extern_decl_name(decl, true);
 		decl->backend_ref = llvm_add_global_raw(c, scratch_buffer_to_string(), type, decl->alignment);
-	}
-	if (!same_module)
-	{
-		LLVMSetLinkage(decl->backend_ref, LLVMExternalLinkage);
 	}
 	if (decl->var.kind == VARDECL_CONST)
 	{
@@ -1058,6 +1113,7 @@ void llvm_add_global_decl(GenContext *c, Decl *decl)
 		scratch_buffer_append(".f");
 		decl->var.optional_ref = llvm_add_global_raw(c, scratch_buffer_to_string(), anyfault, 0);
 	}
+	llvm_set_decl_linkage(c, decl);
 	llvm_set_global_tls(decl);
 }
 
@@ -1072,7 +1128,7 @@ LLVMValueRef llvm_get_opt_ref(GenContext *c, Decl *decl)
 static void llvm_emit_param_attributes(GenContext *c, LLVMValueRef function, ABIArgInfo *info, bool is_return,
                                        int index, int last_index, Decl *decl)
 {
-	assert(last_index == index || info->kind == ABI_ARG_DIRECT_PAIR || info->kind == ABI_ARG_IGNORE
+	ASSERT0(last_index == index || info->kind == ABI_ARG_DIRECT_PAIR || info->kind == ABI_ARG_IGNORE
 		   || info->kind == ABI_ARG_EXPAND || info->kind == ABI_ARG_DIRECT || info->kind == ABI_ARG_DIRECT_COERCE
 		   || info->kind == ABI_ARG_DIRECT_COERCE_INT || info->kind == ABI_ARG_EXPAND_COERCE
 		   || info->kind == ABI_ARG_DIRECT_SPLIT_STRUCT_I32);
@@ -1080,13 +1136,13 @@ static void llvm_emit_param_attributes(GenContext *c, LLVMValueRef function, ABI
 	if (info->attributes.zeroext)
 	{
 		// Direct only
-		assert(index == last_index);
+		ASSERT0(index == last_index);
 		llvm_attribute_add(c, function, attribute_id.zext, index);
 	}
 	if (info->attributes.signext)
 	{
 		// Direct only
-		assert(index == last_index);
+		ASSERT0(index == last_index);
 		llvm_attribute_add(c, function, attribute_id.sext, index);
 	}
 	if (info->attributes.by_reg)
@@ -1112,7 +1168,7 @@ static void llvm_emit_param_attributes(GenContext *c, LLVMValueRef function, ABI
 		case ABI_ARG_INDIRECT:
 			if (is_return)
 			{
-				assert(info->indirect.type);
+				ASSERT0(info->indirect.type);
 				llvm_attribute_add_type(c, function, attribute_id.sret, llvm_get_type(c, info->indirect.type), 1);
 				llvm_attribute_add(c, function, attribute_id.noalias, 1);
 				llvm_attribute_add_int(c, function, attribute_id.align, info->indirect.alignment, 1);
@@ -1163,18 +1219,22 @@ void llvm_append_function_attributes(GenContext *c, Decl *decl)
 	{
 		llvm_attribute_add(c, function, attribute_id.noreturn, -1);
 	}
-	if (decl->is_export && arch_is_wasm(platform_target.arch))
+	if (decl->is_export && arch_is_wasm(compiler.platform.arch))
 	{
-		if (c->code_module == decl_module(decl))
+		if (c->code_module == decl->unit->module)
 		{
 			scratch_buffer_set_extern_decl_name(decl, true);
 			llvm_attribute_add_string(c, function, "wasm-export-name", scratch_buffer_to_string(), -1);
 		}
 	}
-	if (decl->is_extern && arch_is_wasm(platform_target.arch))
+	if (decl->is_extern && arch_is_wasm(compiler.platform.arch))
 	{
 		scratch_buffer_set_extern_decl_name(decl, true);
 		llvm_attribute_add_string(c, function, "wasm-import-name", scratch_buffer_to_string(), -1);
+		if (decl->attrs_resolved && decl->attrs_resolved->wasm_module)
+		{
+			llvm_attribute_add_string(c, function, "wasm-import-module", decl->attrs_resolved->wasm_module, -1);
+		}
 	}
 	if (decl->alignment != type_abi_alignment(decl->type))
 	{
@@ -1187,11 +1247,25 @@ void llvm_append_function_attributes(GenContext *c, Decl *decl)
 	{
 		llvm_attribute_add(c, function, attribute_id.naked, -1);
 	}
+
+	if (compiler.build.feature.sanitize_address && !decl->func_decl.attr_nosanitize_address)
+	{
+		llvm_attribute_add(c, function, attribute_id.sanitize_address, -1);
+	}
+	if (compiler.build.feature.sanitize_memory && !decl->func_decl.attr_nosanitize_memory)
+	{
+		llvm_attribute_add(c, function, attribute_id.sanitize_memory, -1);
+	}
+	if (compiler.build.feature.sanitize_thread && !decl->func_decl.attr_nosanitize_thread)
+	{
+		llvm_attribute_add(c, function, attribute_id.sanitize_thread, -1);
+	}
+
 	LLVMSetFunctionCallConv(function, llvm_call_convention_from_call(prototype->call_abi));
 }
 LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 {
-	assert(!decl->is_value);
+	ASSERT0(!decl->is_value);
 	LLVMValueRef backend_ref = decl->backend_ref;
 	if (backend_ref)
 	{
@@ -1207,12 +1281,8 @@ LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 			{
 				return decl->backend_ref = llvm_get_ref(c, decl->var.alias);
 			}
-			assert(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST);
+			ASSERT0(decl->var.kind == VARDECL_GLOBAL || decl->var.kind == VARDECL_CONST);
 			llvm_add_global_decl(c, decl);
-			if (decl->is_export && platform_target.os == OS_TYPE_WIN32 && !active_target.win.def)
-			{
-				LLVMSetDLLStorageClass(decl->backend_ref, LLVMDLLExportStorageClass);
-			}
 			return decl->backend_ref;
 		case DECL_FUNC:
 			if (decl->func_decl.attr_interface_method)
@@ -1227,18 +1297,15 @@ LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 			}
 			else
 			{
-				backend_ref = decl->backend_ref = LLVMAddFunction(c->module, scratch_buffer_to_string(), type);
+				const char *name = scratch_buffer_to_string();
+				if (decl->is_extern && (backend_ref = LLVMGetNamedFunction(c->module, name)))
+				{
+					return decl->backend_ref = backend_ref;
+				}
+				backend_ref = decl->backend_ref = LLVMAddFunction(c->module, name, type);
 			}
 			llvm_append_function_attributes(c, decl);
-			if (decl->is_export && platform_target.os == OS_TYPE_WIN32  && !active_target.win.def && decl->name != kw_main && decl->name != kw_mainstub)
-			{
-				LLVMSetDLLStorageClass(backend_ref, LLVMDLLExportStorageClass);
-			}
-			if (decl_is_local(decl))
-			{
-				assert(decl_module(decl) == c->code_module);
-				llvm_set_internal_linkage(backend_ref);
-			}
+			llvm_set_decl_linkage(c, decl);
 			return backend_ref;
 		case DECL_DEFINE:
 			return llvm_get_ref(c, decl->define_decl.alias);
@@ -1247,7 +1314,7 @@ LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 			{
 				llvm_get_typeid(c, declptr(decl->enum_constant.parent)->type);
 			}
-			assert(decl->backend_ref);
+			ASSERT0(decl->backend_ref);
 			return decl->backend_ref;
 		case DECL_POISONED:
 		case DECL_ATTRIBUTE:
@@ -1267,7 +1334,6 @@ LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 		case DECL_BODYPARAM:
 		case DECL_CT_ECHO:
 		case DECL_CT_EXEC:
-		case DECL_CT_EXPAND:
 		case DECL_CT_INCLUDE:
 		case DECL_GLOBALS:
 		case DECL_INTERFACE:
@@ -1276,36 +1342,16 @@ LLVMValueRef llvm_get_ref(GenContext *c, Decl *decl)
 	UNREACHABLE
 }
 
-static void llvm_gen_test_main(GenContext *c)
-{
-	Decl *test_runner = global_context.test_func;
-	if (!test_runner)
-	{
-		error_exit("No test runner found.");
-	}
-	assert(!global_context.main && "Main should not be set if a test main is generated.");
-	global_context.main = test_runner;
-	LLVMTypeRef cint = llvm_get_type(c, type_cint);
-	LLVMTypeRef main_type = LLVMFunctionType(cint, NULL, 0, true);
-	LLVMTypeRef runner_type = LLVMFunctionType(c->byte_type, NULL, 0, true);
-	LLVMValueRef func = LLVMAddFunction(c->module, kw_main, main_type);
-	scratch_buffer_set_extern_decl_name(test_runner, true);
-	LLVMValueRef other_func = LLVMAddFunction(c->module, scratch_buffer_to_string(), runner_type);
-	LLVMBuilderRef builder = llvm_create_function_entry(c, func, NULL);
-	LLVMValueRef val = LLVMBuildCall2(builder, runner_type, other_func, NULL, 0, "");
-	val = LLVMBuildSelect(builder, LLVMBuildTrunc(builder, val, c->bool_type, ""),
-						  LLVMConstNull(cint), LLVMConstInt(cint, 1, false), "");
-	LLVMBuildRet(builder, val);
-	LLVMDisposeBuilder(builder);
-}
 
 INLINE GenContext *llvm_gen_tests(Module** modules, unsigned module_count, LLVMContextRef shared_context)
 {
 	Path *test_path = path_create_from_string("_$test", 5, INVALID_SPAN);
 	Module *test_module = compiler_find_or_create_module(test_path, NULL);
 
+	DebugInfo actual_debug_info = compiler.build.debug_info;
+	compiler.build.debug_info = DEBUG_INFO_NONE;
+
 	GenContext *c = cmalloc(sizeof(GenContext));
-	active_target.debug_info = DEBUG_INFO_NONE;
 	gencontext_init(c, test_module, shared_context);
 	gencontext_begin_module(c);
 
@@ -1362,49 +1408,19 @@ INLINE GenContext *llvm_gen_tests(Module** modules, unsigned module_count, LLVMC
 	LLVMSetGlobalConstant(decl_list, 1);
 	LLVMSetInitializer(decl_list, llvm_emit_aggregate_two(c, decls_array_type, decl_ref, count));
 
-	if (active_target.type == TARGET_TYPE_TEST)
-	{
-		llvm_gen_test_main(c);
-	}
-
-	if (llvm_use_debug(c))
-	{
-		LLVMDIBuilderFinalize(c->debug.builder);
-		LLVMDisposeDIBuilder(c->debug.builder);
-	}
+	compiler.build.debug_info = actual_debug_info;
 	return c;
 }
 
-static void llvm_gen_benchmark_main(GenContext *c)
-{
-	Decl *benchmark_runner = global_context.benchmark_func;
-	if (!benchmark_runner)
-	{
-		error_exit("No benchmark runner found.");
-	}
-	assert(!global_context.main && "Main should not be set if a benchmark main is generated.");
-	global_context.main = benchmark_runner;
-	LLVMTypeRef cint = llvm_get_type(c, type_cint);
-	LLVMTypeRef main_type = LLVMFunctionType(cint, NULL, 0, true);
-	LLVMTypeRef runner_type = LLVMFunctionType(c->byte_type, NULL, 0, true);
-	LLVMValueRef func = LLVMAddFunction(c->module, kw_main, main_type);
-	scratch_buffer_set_extern_decl_name(benchmark_runner, true);
-	LLVMValueRef other_func = LLVMAddFunction(c->module, scratch_buffer_to_string(), runner_type);
-	LLVMBuilderRef builder = llvm_create_function_entry(c, func, NULL);
-	LLVMValueRef val = LLVMBuildCall2(builder, runner_type, other_func, NULL, 0, "");
-	val = LLVMBuildSelect(builder, LLVMBuildTrunc(builder, val, c->bool_type, ""),
-						  LLVMConstNull(cint), LLVMConstInt(cint, 1, false), "");
-	LLVMBuildRet(builder, val);
-	LLVMDisposeBuilder(builder);
-}
 
 INLINE GenContext *llvm_gen_benchmarks(Module** modules, unsigned module_count, LLVMContextRef shared_context)
 {
 	Path *benchmark_path = path_create_from_string("$benchmark", 10, INVALID_SPAN);
 	Module *benchmark_module = compiler_find_or_create_module(benchmark_path, NULL);
 
+	DebugInfo actual_debug_info = compiler.build.debug_info;
+	compiler.build.debug_info = DEBUG_INFO_NONE;
 	GenContext *c = cmalloc(sizeof(GenContext));
-	active_target.debug_info = DEBUG_INFO_NONE;
 	gencontext_init(c, benchmark_module, shared_context);
 	gencontext_begin_module(c);
 
@@ -1461,16 +1477,7 @@ INLINE GenContext *llvm_gen_benchmarks(Module** modules, unsigned module_count, 
 	LLVMSetGlobalConstant(decl_list, 1);
 	LLVMSetInitializer(decl_list, llvm_emit_aggregate_two(c, decls_array_type, decl_ref, count));
 
-	if (active_target.type == TARGET_TYPE_BENCHMARK)
-	{
-		llvm_gen_benchmark_main(c);
-	}
-
-	if (llvm_use_debug(c))
-	{
-		LLVMDIBuilderFinalize(c->debug.builder);
-		LLVMDisposeDIBuilder(c->debug.builder);
-	}
+	compiler.build.debug_info = actual_debug_info;
 	return c;
 }
 
@@ -1479,7 +1486,7 @@ void **llvm_gen(Module** modules, unsigned module_count)
 	if (!module_count) return NULL;
 	GenContext **gen_contexts = NULL;
 	llvm_codegen_setup();
-	if (active_target.single_module == SINGLE_MODULE_ON)
+	if (compiler.build.single_module == SINGLE_MODULE_ON)
 	{
 		GenContext *first_context;
 		unsigned first_element;
@@ -1492,11 +1499,11 @@ void **llvm_gen(Module** modules, unsigned module_count)
 		}
 		if (!gen_contexts) return NULL;
 		GenContext *first = gen_contexts[0];
-		if (active_target.benchmarking)
+		if (compiler.build.benchmarking)
 		{
 			vec_add(gen_contexts, llvm_gen_benchmarks(modules, module_count, context));
 		}
-		if (active_target.testing)
+		if (compiler.build.testing)
 		{
 			vec_add(gen_contexts, llvm_gen_tests(modules, module_count, context));
 		}
@@ -1512,15 +1519,15 @@ void **llvm_gen(Module** modules, unsigned module_count)
 	}
 	for (unsigned i = 0; i < module_count; i++)
 	{
-			GenContext *result = llvm_gen_module(modules[i], NULL);
-			if (!result) continue;
-			vec_add(gen_contexts, result);
+		GenContext *result = llvm_gen_module(modules[i], NULL);
+		if (!result) continue;
+		vec_add(gen_contexts, result);
 	}
-	if (active_target.benchmarking)
+	if (compiler.build.benchmarking)
 	{
 		vec_add(gen_contexts, llvm_gen_benchmarks(modules, module_count, NULL));
 	}
-	if (active_target.testing)
+	if (compiler.build.testing)
 	{
 		vec_add(gen_contexts, llvm_gen_tests(modules, module_count, NULL));
 	}
@@ -1557,9 +1564,9 @@ static bool module_is_stdlib(Module *module)
 static GenContext *llvm_gen_module(Module *module, LLVMContextRef shared_context)
 {
 	if (!vec_size(module->units)) return NULL;
-	if (active_target.emit_stdlib == EMIT_STDLIB_OFF && module_is_stdlib(module)) return NULL;
+	if (compiler.build.emit_stdlib == EMIT_STDLIB_OFF && module_is_stdlib(module)) return NULL;
 
-	assert(intrinsics_setup);
+	ASSERT0(intrinsics_setup);
 
 	bool has_elements = false;
 	GenContext *gen_context = cmalloc(sizeof(GenContext));
@@ -1597,12 +1604,12 @@ static GenContext *llvm_gen_module(Module *module, LLVMContextRef shared_context
 			if (only_used && !func->is_live) continue;
 			if (func->func_decl.attr_test)
 			{
-				if (!active_target.testing) continue;
+				if (!compiler.build.testing) continue;
 				vec_add(module->tests, func);
 			}
 			if (func->func_decl.attr_benchmark)
 			{
-				if (!active_target.benchmarking) continue;
+				if (!compiler.build.benchmarking) continue;
 				vec_add(module->benchmarks, func);
 			}
 			llvm_emit_function_decl(gen_context, func);
@@ -1616,7 +1623,7 @@ static GenContext *llvm_gen_module(Module *module, LLVMContextRef shared_context
 			llvm_emit_function_decl(gen_context, func);
 		}
 
-		if (active_target.type != TARGET_TYPE_TEST && active_target.type != TARGET_TYPE_BENCHMARK && unit->main_function && unit->main_function->is_synthetic)
+		if (unit->main_function && unit->main_function->is_synthetic)
 		{
 			has_elements = true;
 			llvm_emit_function_decl(gen_context, unit->main_function);
@@ -1647,8 +1654,8 @@ static GenContext *llvm_gen_module(Module *module, LLVMContextRef shared_context
 
 		FOREACH(Decl *, decl, unit->functions)
 		{
-			if (decl->func_decl.attr_test && !active_target.testing) continue;
-			if (decl->func_decl.attr_benchmark && !active_target.benchmarking) continue;
+			if (decl->func_decl.attr_test && !compiler.build.testing) continue;
+			if (decl->func_decl.attr_benchmark && !compiler.build.benchmarking) continue;
 			if (only_used && !decl->is_live) continue;
 			if (decl->func_decl.body)
 			{
@@ -1664,7 +1671,7 @@ static GenContext *llvm_gen_module(Module *module, LLVMContextRef shared_context
 			llvm_emit_function_body(gen_context, func);
 		}
 
-		if (active_target.type != TARGET_TYPE_TEST && active_target.type != TARGET_TYPE_BENCHMARK && unit->main_function && unit->main_function->is_synthetic)
+		if (unit->main_function && unit->main_function->is_synthetic)
 		{
 			has_elements = true;
 			llvm_emit_function_body(gen_context, unit->main_function);
@@ -1693,7 +1700,7 @@ static GenContext *llvm_gen_module(Module *module, LLVMContextRef shared_context
 	}
 
 	// If it's in test or benchmark, then we want to serialize the IR before it is optimized.
-	if (active_target.test_output || active_target.benchmark_output)
+	if (compiler.build.test_output || compiler.build.benchmark_output)
 	{
 		gencontext_print_llvm_ir(gen_context);
 		gencontext_verify_ir(gen_context);
@@ -1761,7 +1768,7 @@ AlignSize llvm_abi_alignment(GenContext *c, LLVMTypeRef type)
 
 LLVMValueRef llvm_emit_memcpy(GenContext *c, LLVMValueRef dest, unsigned dest_align, LLVMValueRef source, unsigned src_align, uint64_t len)
 {
-	assert(dest_align && src_align);
+	ASSERT0(dest_align && src_align);
 	if (len <= UINT32_MAX)
 	{
 		return LLVMBuildMemCpy(c->builder, dest, dest_align, source, src_align, llvm_const_int(c, type_uint, len));

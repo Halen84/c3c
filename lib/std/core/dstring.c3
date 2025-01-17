@@ -1,13 +1,14 @@
 module std::core::dstring;
 import std::io;
 
-distinct DString (OutStream) = void*;
+distinct DString (OutStream) = DStringOpaque*;
+distinct DStringOpaque = void;
 
 const usz MIN_CAPACITY @private = 16;
 
-/**
- * @require !self.data() "String already initialized"
- **/
+<*
+ @require !self.data() "String already initialized"
+*>
 fn DString DString.new_init(&self, usz capacity = MIN_CAPACITY, Allocator allocator = allocator::heap())
 {
 	if (capacity < MIN_CAPACITY) capacity = MIN_CAPACITY;
@@ -18,9 +19,9 @@ fn DString DString.new_init(&self, usz capacity = MIN_CAPACITY, Allocator alloca
 	return *self = (DString)data;
 }
 
-/**
- * @require !self.data() "String already initialized"
- **/
+<*
+ @require !self.data() "String already initialized"
+*>
 fn DString DString.temp_init(&self, usz capacity = MIN_CAPACITY)
 {
 	self.new_init(capacity, allocator::temp()) @inline;
@@ -47,6 +48,56 @@ fn DString new(String c = "", Allocator allocator = allocator::heap())
 }
 
 fn DString temp_new(String s = "") => new(s, allocator::temp()) @inline;
+
+
+fn void DString.replace_char(self, char ch, char replacement)
+{
+	StringData* data = self.data();
+	foreach (&c : data.chars[:data.len])
+	{
+		if (*c == ch) *c = replacement;
+	}
+}
+
+fn void DString.replace(&self, String needle, String replacement)
+{
+	StringData* data = self.data();
+	usz needle_len = needle.len;
+	if (!data || data.len < needle_len) return;
+	usz replace_len = replacement.len;
+	if (needle_len == 1 && replace_len == 1)
+	{
+		self.replace_char(needle[0], replacement[0]);
+		return;
+	}
+	@pool(data.allocator) {
+		String str = self.tcopy_str();
+		self.clear();
+		usz len = str.len;
+		usz match = 0;
+		foreach (i, c : str)
+		{
+			if (c == needle[match])
+			{
+				match++;
+				if (match == needle_len)
+				{
+					self.append_chars(replacement);
+					match = 0;
+					continue;
+				}
+				continue;
+			}
+			if (match > 0)
+			{
+				self.append_chars(str[i - match:match]);
+				match = 0;
+			}
+			self.append_char(c);
+		}
+		if (match > 0) self.append_chars(str[^match:match]);
+	};
+}
 
 fn DString DString.new_concat(self, DString b, Allocator allocator = allocator::heap())
 {
@@ -82,15 +133,15 @@ fn usz DString.capacity(self)
 	return self.data().capacity;
 }
 
-fn usz DString.len(&self) @dynamic
+fn usz DString.len(&self) @dynamic @operator(len)
 {
 	if (!*self) return 0;
 	return self.data().len;
 }
 
-/**
- * @require new_size <= self.len()
- */
+<*
+ @require new_size <= self.len()
+*>
 fn void DString.chop(self, usz new_size)
 {
 	if (!self) return;
@@ -104,19 +155,39 @@ fn String DString.str_view(self)
 	return (String)data.chars[:data.len];
 }
 
-fn void DString.append_utf32(&self, Char32[] chars)
+<*
+ @require index < self.len()
+ @require self.data() "Empty string"
+*>
+fn char DString.char_at(self, usz index) @operator([])
+{
+	return self.data().chars[index];
+}
+
+<*
+ @require index < self.len()
+ @require self.data() "Empty string"
+*>
+fn char* DString.char_ref(&self, usz index) @operator(&[])
+{
+	return &self.data().chars[index];
+}
+
+fn usz DString.append_utf32(&self, Char32[] chars)
 {
 	self.reserve(chars.len);
+	usz end = self.len();
 	foreach (Char32 c : chars)
 	{
 		self.append_char32(c);
 	}
+	return self.data().len - end;
 }
 
-/**
- * @require index < self.len()
- **/
-fn void DString.set(self, usz index, char c)
+<*
+ @require index < self.len()
+*>
+fn void DString.set(self, usz index, char c) @operator([]=)
 {
 	self.data().chars[index] = c;
 }
@@ -132,10 +203,10 @@ fn void DString.append_repeat(&self, char c, usz times)
 	}
 }
 
-/**
- * @require c <= 0x10ffff
- */
-fn void DString.append_char32(&self, Char32 c)
+<*
+ @require c <= 0x10ffff
+*>
+fn usz DString.append_char32(&self, Char32 c)
 {
 	char[4] buffer @noinit;
 	char* p = &buffer;
@@ -144,6 +215,7 @@ fn void DString.append_char32(&self, Char32 c)
 	StringData* data = self.data();
 	data.chars[data.len:n] = buffer[:n];
 	data.len += n;
+	return n;
 }
 
 fn DString DString.tcopy(&self) => self.copy(allocator::temp());
@@ -242,7 +314,7 @@ fn void DString.append_chars(&self, String str)
 
 fn Char32[] DString.copy_utf32(&self, Allocator allocator = allocator::heap())
 {
-	return self.str_view().to_new_utf32(allocator) @inline!!;
+	return self.str_view().to_utf32(allocator) @inline!!;
 }
 
 fn void DString.append_string(&self, DString str)
@@ -280,20 +352,20 @@ fn void DString.append_char(&self, char c)
 	data.chars[data.len++] = c;
 }
 
-/**
- * @require start < self.len()
- * @require end < self.len()
- * @require end >= start "End must be same or equal to the start"
- **/
+<*
+ @require start < self.len()
+ @require end < self.len()
+ @require end >= start "End must be same or equal to the start"
+*>
 fn void DString.delete_range(&self, usz start, usz end)
 {
 	self.delete(start, end - start + 1);
 }
 
-/**
- * @require start < self.len()
- * @require start + len <= self.len()
- **/
+<*
+ @require start < self.len()
+ @require start + len <= self.len()
+*>
 fn void DString.delete(&self, usz start, usz len = 1)
 {
 	if (!len) return;
@@ -337,7 +409,10 @@ macro void DString.append(&self, value)
 	$endswitch
 }
 
-fn void DString.insert_at(&self, usz index, String s)
+<*
+ @require index <= self.len()
+*>
+fn void DString.insert_chars_at(&self, usz index, String s)
 {
 	if (s.len == 0) return;
 	self.reserve(s.len);
@@ -369,20 +444,125 @@ fn void DString.insert_at(&self, usz index, String s)
 	}
 }
 
+<*
+ @require index <= self.len()
+*>
+fn void DString.insert_string_at(&self, usz index, DString str)
+{
+	StringData* other = str.data();
+	if (!other) return;
+	self.insert_at(index, str.str_view());
+}
+
+<*
+ @require index <= self.len()
+*>
+fn void DString.insert_char_at(&self, usz index, char c)
+{
+	self.reserve(1);
+	StringData* data = self.data();
+
+	char* start = &data.chars[index];
+	mem::move(start + 1, start, self.len() - index);
+	data.chars[index] = c;
+	data.len++;
+}
+
+<*
+ @require index <= self.len()
+*>
+fn usz DString.insert_char32_at(&self, usz index, Char32 c)
+{
+	char[4] buffer @noinit;
+	char* p = &buffer;
+	usz n = conv::char32_to_utf8_unsafe(c, &p);
+
+	self.reserve(n);
+	StringData* data = self.data();
+
+	char* start = &data.chars[index];
+	mem::move(start + n, start, self.len() - index);
+	data.chars[index:n] = buffer[:n];
+	data.len += n;
+
+	return n;
+}
+
+<*
+ @require index <= self.len()
+*>
+fn usz DString.insert_utf32_at(&self, usz index, Char32[] chars)
+{
+	usz n = conv::utf8len_for_utf32(chars);
+	
+	self.reserve(n);
+	StringData* data = self.data();
+
+	char* start = &data.chars[index];
+	mem::move(start + n, start, self.len() - index);
+
+	char[4] buffer @noinit;
+
+	foreach(c : chars)
+	{
+		char* p = &buffer;
+		usz m = conv::char32_to_utf8_unsafe(c, &p);
+		data.chars[index:m] = buffer[:m];
+		index += m;
+	}
+
+	data.len += n;
+
+	return n;
+}
+
+macro void DString.insert_at(&self, usz index, value)
+{
+	var $Type = $typeof(value);
+	$switch ($Type)
+		$case char:
+		$case ichar:
+			self.insert_char_at(index, value);
+		$case DString:
+			self.insert_string_at(index, value);
+		$case String:
+			self.insert_chars_at(index, value);
+		$case Char32:
+			self.insert_char32_at(index, value);
+		$default:
+			$switch
+				$case $defined((Char32)value):
+					self.insert_char32_at(index, (Char32)value);
+				$case $defined((String)value):
+					self.insert_chars_at(index, (String)value);
+				$default:
+					$error "Unsupported type for insert";
+			$endswitch
+	$endswitch
+}
+
 fn usz! DString.appendf(&self, String format, args...) @maydiscard
 {
-	Formatter formatter;
-	formatter.init(&out_string_append_fn, self);
-	return formatter.vprintf(format, args);
+	if (!self.data()) self.new_init(format.len + 20);
+	@pool(self.data().allocator)
+	{
+		Formatter formatter;
+		formatter.init(&out_string_append_fn, self);
+		return formatter.vprintf(format, args);
+	};
 }
 
 fn usz! DString.appendfn(&self, String format, args...) @maydiscard
 {
-	Formatter formatter;
-	formatter.init(&out_string_append_fn, self);
-	usz len = formatter.vprintf(format, args)!;
-	self.append('\n');
-	return len + 1;
+	if (!self.data()) self.new_init(format.len + 20);
+	@pool(self.data().allocator)
+	{
+		Formatter formatter;
+		formatter.init(&out_string_append_fn, self);
+		usz len = formatter.vprintf(format, args)!;
+		self.append('\n');
+		return len + 1;
+	};
 }
 
 fn DString new_join(String[] s, String joiner, Allocator allocator = allocator::heap())
@@ -409,6 +589,19 @@ fn void! out_string_append_fn(void* data, char c) @private
 	s.append_char(c);
 }
 
+fn void DString.reverse(self)
+{
+	StringData *data = self.data();
+	if (!data) return;
+	isz mid = data.len / 2;
+	for (isz i = 0; i < mid; i++)
+	{
+		char temp = data.chars[i];
+		isz reverse_index = data.len - 1 - i;
+		data.chars[i] = data.chars[reverse_index];
+		data.chars[reverse_index] = temp;
+	}
+}
 
 fn StringData* DString.data(self) @inline @private
 {

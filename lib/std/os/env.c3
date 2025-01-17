@@ -4,11 +4,11 @@
 module std::os::env;
 import std::io::path, libc, std::os;
 
-/**
- * @param [in] name
- * @require name.len > 0
- * @return! SearchResult.MISSING
- **/
+<*
+ @param [in] name
+ @require name.len > 0
+ @return! SearchResult.MISSING
+*>
 fn String! get_var(String name, Allocator allocator = allocator::heap())
 {
 	@pool(allocator)
@@ -41,11 +41,11 @@ fn String! get_var_temp(String name)
 	return get_var(name, allocator::temp());
 }
 
-/**
- * @param [in] name
- * @param [in] value
- * @require name.len > 0
- **/
+<*
+ @param [in] name
+ @param [in] value
+ @require name.len > 0
+*>
 fn bool set_var(String name, String value, bool overwrite = true)
 {
 	@pool()
@@ -69,9 +69,9 @@ fn bool set_var(String name, String value, bool overwrite = true)
 
 }
 
-/**
- * Returns the current user's home directory.
- **/
+<*
+Returns the current user's home directory.
+*>
 fn String! get_home_dir(Allocator using = allocator::heap())
 {
 	String home;
@@ -83,10 +83,15 @@ fn String! get_home_dir(Allocator using = allocator::heap())
 	return get_var(home, using);
 }
 
-/**
- * Returns the current user's config directory.
- **/
-fn Path! get_config_dir(Allocator allocator = allocator::heap())
+fn Path! get_config_dir(Allocator allocator = allocator::heap()) @deprecated("use new_get_config_dir()")
+{
+	return new_get_config_dir(allocator) @inline;
+}
+
+<*
+Returns the current user's config directory.
+*>
+fn Path! new_get_config_dir(Allocator allocator = allocator::heap())
 {
 	@pool(allocator)
 	{
@@ -100,16 +105,16 @@ fn Path! get_config_dir(Allocator allocator = allocator::heap())
 			String s = get_var_temp("XDG_CONFIG_HOME") ?? get_var_temp("HOME")!;
 			const DIR = ".config";
 		$endif
-		return path::temp_new(s).append(DIR, .allocator = allocator);
+		return path::temp_new(s).new_append(DIR, allocator: allocator);
 	$endif
 	};
 }
 
 
-/**
- * @param [in] name
- * @require name.len > 0
- **/
+<*
+ @param [in] name
+ @require name.len > 0
+*>
 fn bool clear_var(String name)
 {
 	@pool()
@@ -126,11 +131,16 @@ fn bool clear_var(String name)
 	};
 }
 
-fn String! executable_path(Allocator allocator = allocator::heap())
+fn String! executable_path(Allocator allocator = allocator::heap()) @deprecated("use new_executable_path()")
+{
+	return new_executable_path(allocator) @inline;
+}
+
+fn String! new_executable_path(Allocator allocator = allocator::heap())
 {
 	$if env::DARWIN:
 		return darwin::executable_path(allocator);
 	$else
-		return "<Unsupported>";
+		return SearchResult.MISSING?;
 	$endif
 }

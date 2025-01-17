@@ -20,7 +20,7 @@ static inline LLVMTypeRef llvm_type_from_decl(GenContext *c, Decl *decl)
 		case DECL_INTERFACE:
 			UNREACHABLE
 		case DECL_BITSTRUCT:
-			return llvm_get_type(c, decl->bitstruct.base_type->type);
+			return llvm_get_type(c, decl->strukt.container_type->type);
 		case DECL_FUNC:
 			UNREACHABLE
 		case DECL_TYPEDEF:
@@ -276,8 +276,8 @@ LLVMTypeRef llvm_func_type(GenContext *context, FunctionPrototype *prototype)
 
 LLVMTypeRef llvm_get_pointee_type(GenContext *c, Type *any_type)
 {
-	any_type = any_type->canonical;
-	assert(any_type->type_kind == TYPE_POINTER);
+	any_type = type_lowering(any_type);
+	ASSERT0(any_type->type_kind == TYPE_POINTER);
 	if (any_type == type_voidptr) return llvm_get_type(c, type_char);
 	return llvm_get_type(c, any_type->pointer);
 }
@@ -300,7 +300,7 @@ LLVMTypeRef llvm_get_type(GenContext *c, Type *any_type)
 {
 	if (any_type->backend_type)
 	{
-		assert(LLVMGetTypeContext(any_type->backend_type) == c->context && "Should have been purged");
+		ASSERT0(LLVMGetTypeContext(any_type->backend_type) == c->context && "Should have been purged");
 		return any_type->backend_type;
 	}
 	Type *type = type_lowering(any_type);
@@ -337,7 +337,7 @@ LLVMTypeRef llvm_get_type(GenContext *c, Type *any_type)
 			return any_type->backend_type = LLVMIntTypeInContext(c->context, 8U);
 		case TYPE_POINTER:
 		case TYPE_FUNC_PTR:
-			assert(c->ptr_type);
+			ASSERT0(c->ptr_type);
 			return any_type->backend_type = c->ptr_type;
 		case TYPE_ARRAY:
 		case TYPE_FLEXIBLE_ARRAY:
@@ -370,7 +370,7 @@ LLVMTypeRef llvm_get_coerce_type(GenContext *c, ABIArgInfo *arg_info)
 		case ABI_ARG_DIRECT_SPLIT_STRUCT_I32:
 		{
 			LLVMTypeRef coerce_type = llvm_get_type(c, type_uint);
-			assert(arg_info->direct_struct_expand > 1U && arg_info->direct_struct_expand < 10);
+			ASSERT0(arg_info->direct_struct_expand > 1U && arg_info->direct_struct_expand < 10);
 			LLVMTypeRef refs[10];
 			for (unsigned i = 0; i < arg_info->direct_struct_expand; i++)
 			{
@@ -411,7 +411,7 @@ LLVMTypeRef llvm_abi_type(GenContext *c, AbiType type)
 
 static inline LLVMValueRef llvm_generate_temp_introspection_global(GenContext *c, Type *type)
 {
-	assert(!type->backend_typeid);
+	ASSERT0(!type->backend_typeid);
 	LLVMValueRef temp = LLVMAddGlobal(c->module, c->introspect_type, "tempid");
 	type->backend_typeid = LLVMBuildPtrToInt(c->builder, temp, c->typeid_type, "");
 	return temp;
@@ -420,11 +420,15 @@ static inline LLVMValueRef llvm_generate_temp_introspection_global(GenContext *c
 static inline LLVMValueRef llvm_generate_introspection_global(GenContext *c, LLVMValueRef original_global, Type *type, IntrospectType introspect_type,
 															  Type *inner, size_t len, LLVMValueRef additional, bool is_external)
 {
+	// Push the builder
+	void *builder = c->builder;
+	c->builder = c->global_builder;
+
 	if (original_global)
 	{
-		assert(type->backend_typeid);
+		ASSERT0(type->backend_typeid);
 	}
-	assert(type == type->canonical);
+	ASSERT0(type == type->canonical);
 	Type *parent_type = type_find_parent_type(type);
 	LLVMValueRef parent_typeid;
 	LLVMValueRef global_name = NULL;
@@ -478,6 +482,7 @@ static inline LLVMValueRef llvm_generate_introspection_global(GenContext *c, LLV
 	{
 		type->backend_typeid = LLVMBuildPtrToInt(c->builder, global_name, c->typeid_type, "");
 	}
+	c->builder = builder;
 	return type->backend_typeid;
 }
 static LLVMValueRef llvm_get_introspection_for_builtin_type(GenContext *c, Type *type, IntrospectType introspect_type, int bits)
@@ -488,8 +493,12 @@ static LLVMValueRef llvm_get_introspection_for_builtin_type(GenContext *c, Type 
 
 static LLVMValueRef llvm_get_introspection_for_enum(GenContext *c, Type *type)
 {
+
+	void *builder = c->builder;
+	c->builder = c->global_builder;
+
 	Decl *decl = type->decl;
-	bool is_external = decl_module(decl) != c->code_module;
+	bool is_external = decl->unit->module != c->code_module;
 	bool is_dynamic = decl->is_dynamic;
 
 	Decl **enum_vals = decl->enums.values;
@@ -538,10 +547,8 @@ static LLVMValueRef llvm_get_introspection_for_enum(GenContext *c, Type *type)
 		for (unsigned i = 0; i < elements; i++)
 		{
 			BEValue value;
-			llvm_emit_expr(c, &value, enum_vals[i]->enum_constant.args[ai]);
-			assert(!llvm_value_is_addr(&value));
-			LLVMValueRef llvm_value = llvm_value_is_bool(&value) ? LLVMBuildZExt(c->builder, value.value, c->byte_type, "")
-																 : value.value;
+			llvm_emit_expr_global_value(c, &value, enum_vals[i]->enum_constant.args[ai]);
+			LLVMValueRef llvm_value = llvm_load_value_store(c, &value);
 			values[i] = llvm_value;
 			if (!val_type)
 			{
@@ -565,11 +572,15 @@ static LLVMValueRef llvm_get_introspection_for_enum(GenContext *c, Type *type)
 		LLVMSetGlobalConstant(global_ref, true);
 		associated_value->backend_ref = global_ref;
 	}
+	c->builder = builder;
 	return val;
 }
 
 static LLVMValueRef llvm_get_introspection_for_struct_union(GenContext *c, Type *type)
 {
+	void *builder = c->builder;
+	c->builder = c->global_builder;
+
 	Decl *decl = type->decl;
 	Decl **decls = decl->strukt.members;
 	LLVMValueRef ref = llvm_generate_temp_introspection_global(c, type);
@@ -581,6 +592,7 @@ static LLVMValueRef llvm_get_introspection_for_struct_union(GenContext *c, Type 
 		}
 	}
 
+	c->builder = builder;
 	return llvm_generate_introspection_global(c, ref, type, decl->decl_kind == DECL_UNION ? INTROSPECT_TYPE_UNION : INTROSPECT_TYPE_STRUCT,
 											  NULL,
 											  vec_size(decls), NULL, false);
@@ -588,6 +600,9 @@ static LLVMValueRef llvm_get_introspection_for_struct_union(GenContext *c, Type 
 
 static LLVMValueRef llvm_get_introspection_for_fault(GenContext *c, Type *type)
 {
+	void *builder = c->builder;
+	c->builder = c->global_builder;
+
 	Decl *decl = type->decl;
 	Decl **fault_vals = decl->enums.values;
 	unsigned elements = vec_size(fault_vals);
@@ -615,6 +630,7 @@ static LLVMValueRef llvm_get_introspection_for_fault(GenContext *c, Type *type)
 	{
 		values[i] = fault_vals[i]->backend_ref;
 	}
+	c->builder = builder;
 	return llvm_generate_introspection_global(c, ref, type, INTROSPECT_TYPE_FAULT, NULL, elements, NULL, false);
 }
 
@@ -663,7 +679,7 @@ LLVMValueRef llvm_get_typeid(GenContext *c, Type *type)
 		case TYPE_BITSTRUCT:
 		{
 			LLVMValueRef ref = llvm_generate_temp_introspection_global(c, type);
-			return llvm_generate_introspection_global(c, ref, type, INTROSPECT_TYPE_BITSTRUCT, type->decl->bitstruct.base_type->type, 0, NULL, false);
+			return llvm_generate_introspection_global(c, ref, type, INTROSPECT_TYPE_BITSTRUCT, type->decl->strukt.container_type->type, 0, NULL, false);
 		}
 		case TYPE_TYPEDEF:
 			return llvm_get_typeid(c, type->canonical);

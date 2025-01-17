@@ -1,16 +1,16 @@
 module std::sort;
 
-/**
- * Perform a binary search over the sorted array and return the index
- * in [0, array.len) where x would be inserted or cmp(i) is true and cmp(j) is true for j in [i, array.len).
- * @require @is_sortable(list) "The list must be sortable"
- * @require @is_valid_cmp_fn(cmp, list, context) "Expected a comparison function which compares values"
- * @require @is_valid_context(cmp, context) "Expected a valid context"
- **/
+<*
+Perform a binary search over the sorted array and return the index
+in [0, array.len) where x would be inserted or cmp(i) is true and cmp(j) is true for j in [i, array.len).
+ @require @is_sortable(list) "The list must be sortable"
+ @require @is_valid_cmp_fn(cmp, list, context) "Expected a comparison function which compares values"
+ @require @is_valid_context(cmp, context) "Expected a valid context"
+*>
 macro usz binarysearch(list, x, cmp = EMPTY_MACRO_SLOT, context = EMPTY_MACRO_SLOT) @builtin
 {
 	usz i;
-	usz len = @len_from_list(list);
+	usz len = len_from_list(list);
 	var $no_cmp = @is_empty_macro_slot(cmp);
 	var $has_context = @is_valid_macro_slot(context);
 	for (usz j = len; i < j;)

@@ -3,9 +3,9 @@
 // a copy of which can be found in the LICENSE_STDLIB file.
 module std::core::builtin;
 
-/**
- * @require types::@comparable_value(a) && types::@comparable_value(b)
- **/
+<*
+ @require types::@comparable_value(a) && types::@comparable_value(b)
+*>
 macro less(a, b) @builtin
 {
 	$switch
@@ -18,9 +18,9 @@ macro less(a, b) @builtin
 	$endswitch
 }
 
-/**
- * @require types::@comparable_value(a) && types::@comparable_value(b)
- **/
+<*
+ @require types::@comparable_value(a) && types::@comparable_value(b)
+*>
 macro less_eq(a, b) @builtin
 {
 	$switch
@@ -33,9 +33,9 @@ macro less_eq(a, b) @builtin
 	$endswitch
 }
 
-/**
- * @require types::@comparable_value(a) && types::@comparable_value(b)
- **/
+<*
+ @require types::@comparable_value(a) && types::@comparable_value(b)
+*>
 macro greater(a, b) @builtin
 {
 	$switch
@@ -48,9 +48,9 @@ macro greater(a, b) @builtin
 	$endswitch
 }
 
-/**
- * @require types::@comparable_value(a) && types::@comparable_value(b)
- **/
+<*
+ @require types::@comparable_value(a) && types::@comparable_value(b)
+*>
 macro int compare_to(a, b) @builtin
 {
 	$switch
@@ -62,9 +62,9 @@ macro int compare_to(a, b) @builtin
 		return (int)(a > b) - (int)(a < b);
 	$endswitch
 }
-/**
- * @require types::@comparable_value(a) && types::@comparable_value(b)
- **/
+<*
+ @require types::@comparable_value(a) && types::@comparable_value(b)
+*>
 macro greater_eq(a, b) @builtin
 {
 	$switch
@@ -77,9 +77,9 @@ macro greater_eq(a, b) @builtin
 	$endswitch
 }
 
-/**
- * @require types::@equatable_value(a) && types::@equatable_value(b) `values must be equatable`
- **/
+<*
+ @require types::@equatable_value(a) && types::@equatable_value(b) `values must be equatable`
+*>
 macro bool equals(a, b) @builtin
 {
 	$switch
@@ -97,13 +97,13 @@ macro bool equals(a, b) @builtin
 macro min(x, ...) @builtin
 {
 	$if $vacount == 1:
-		return less(x, $vaarg(0)) ? x : $vaarg(0);
+		return less(x, $vaarg[0]) ? x : $vaarg[0];
 	$else
 		var result = x;
 		$for (var $i = 0; $i < $vacount; $i++)
-			if (less($vaarg($i), result))
+			if (less($vaarg[$i], result))
 			{
-				 result = $vaarg($i);
+				 result = $vaarg[$i];
 			}
 		$endfor
 		return result;
@@ -113,13 +113,13 @@ macro min(x, ...) @builtin
 macro max(x, ...) @builtin
 {
 	$if $vacount == 1:
-		return greater(x, $vaarg(0)) ? x : $vaarg(0);
+		return greater(x, $vaarg[0]) ? x : $vaarg[0];
 	$else
 		var result = x;
 		$for (var $i = 0; $i < $vacount; $i++)
-			if (greater($vaarg($i), result))
+			if (greater($vaarg[$i], result))
 			{
-				 result = $vaarg($i);
+				 result = $vaarg[$i];
 			}
 		$endfor
 		return result;

@@ -13,10 +13,10 @@ macro make_seed($Type, char[] input)
 }
 
 // TODO: Make endian independent
-/**
- * @param [in] input
- * @param [inout] out_buffer
- **/
+<*
+ @param [in] input
+ @param [inout] out_buffer
+*>
 fn void seeder(char[] input, char[] out_buffer)
 {
 	$if env::BIG_ENDIAN:
@@ -72,8 +72,9 @@ macro uint hash(value) @local
 	return fnv32a::encode(&&bitcast(value, char[$sizeof(value)]));
 }
 
-fn char[8 * 4] entropy()
+fn char[8 * 4] entropy() @if(!env::WASM_NOLIBC)
 {
+
 	void* addr = malloc(1);
 	free(addr);
 	static uint random_int;
@@ -87,6 +88,23 @@ fn char[8 * 4] entropy()
 		hash(clock::now()),
 		hash(&DString.new_init),
 		hash(allocator::heap())
-    };
-    return bitcast(entropy_data, char[8 * 4]);
+	};
+	return bitcast(entropy_data, char[8 * 4]);
+}
+
+fn char[8 * 4] entropy() @if(env::WASM_NOLIBC)
+{
+	static uint random_int;
+	random_int += 0xedf19156;
+	uint[8] entropy_data = {
+		hash($$TIME),
+		hash(&entropy),
+		random_int,
+		hash($$TIME),
+		hash(&entropy),
+		random_int,
+		hash($$TIME),
+		hash(&entropy),
+	};
+	return bitcast(entropy_data, char[8 * 4]);
 }

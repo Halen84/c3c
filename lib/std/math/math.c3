@@ -119,21 +119,43 @@ def MATRIX4_IDENTITY = matrix::IDENTITY4(<double>);
 def MATRIX4F_IDENTITY = matrix::IDENTITY4(<float>);
 
 
-/**
- * @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
- **/
+<*
+ @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
+*>
 macro deg_to_rad(x) {
     return x * PI / 180;
 }
 
-/**
- * @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
- **/
+<*
+ @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
+*>
 macro abs(x) => $$abs(x);
 
-/**
- * @require values::@is_int(x) `The input must be an integer`
- **/
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+ @require values::@is_int(y) || values::@is_float(y) "Expected an integer or floating point value"
+*>
+macro is_approx(x, y, eps)
+{
+	if (x == y) return true;
+	if (is_nan(x) || is_nan(y)) return false;
+	return abs(x-y) <= eps; 
+}
+
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+ @require values::@is_int(y) || values::@is_float(y) "Expected an integer or floating point value"
+*>
+macro is_approx_rel(x, y, eps)
+{
+	if (x == y) return true;
+	if (is_nan(x) || is_nan(y)) return false;
+	return abs(x-y) <= eps * max(abs(x), abs(y)); 
+}
+
+<*
+ @require values::@is_int(x) `The input must be an integer`
+*>
 macro sign(x)
 {
 	var $Type = $typeof(x);
@@ -144,10 +166,10 @@ macro sign(x)
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- * @require values::@is_int(y) || values::@is_float(y) "Expected an integer or floating point value"
- **/
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+ @require values::@is_int(y) || values::@is_float(y) "Expected an integer or floating point value"
+*>
 macro atan2(x, y)
 {
 	$if @typeis(x, float) && @typeis(y, float):
@@ -157,23 +179,42 @@ macro atan2(x, y)
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- * @require $and(@typekind(y) == ARRAY || @typekind(y) == VECTOR, y.len == 2)
- * @require $assignable(x, $typeof(y[0]))
- **/
-macro sincos(x, y)
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+ @require @typekind(sinp) == POINTER "Expected sinp to be a pointer"
+ @require values::@is_same_type(sinp, cosp) "Expected sinp and cosp to have the same type"
+ @require $assignable(x, $typeof(*sinp)) "Expected x and sinp/cosp to have the same type"
+*>
+macro sincos_ref(x, sinp, cosp)
 {
-	$if @typeid(y[0]) == float.typeid:
-		return _sincosf(x, y);
+	$if @typeid(*sinp) == float.typeid:
+		return _sincosf(x, sinp, cosp);
 	$else
-		return _sincos(x, y);
+		return _sincos(x, sinp, cosp);
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- **/
+<*
+ Return a vector with sin / cos of the given angle.
+
+ @param x `the angle in radians`
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+*>
+macro sincos(x)
+{
+	$if @typeid(x) == float.typeid:
+		float[<2>] v @noinit;
+		_sincosf(x, &v[0], &v[1]);
+	$else
+		double[<2>] v @noinit;
+		_sincos(x, &v[0], &v[1]);
+	$endif
+	return v;
+}
+
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+*>
 macro atan(x)
 {
 	$if @typeid(x) == float.typeid:
@@ -183,9 +224,9 @@ macro atan(x)
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- **/
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+*>
 macro atanh(x)
 {
 	$if @typeid(x) == float.typeid:
@@ -195,9 +236,9 @@ macro atanh(x)
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- **/
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+*>
 macro acos(x)
 {
 	$if @typeid(x) == float.typeid:
@@ -207,9 +248,9 @@ macro acos(x)
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- **/
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+*>
 macro acosh(x)
 {
 	$if @typeid(x) == float.typeid:
@@ -219,9 +260,9 @@ macro acosh(x)
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- **/
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+*>
 macro asin(x)
 {
 	$if @typeid(x) == float.typeid:
@@ -231,9 +272,9 @@ macro asin(x)
 	$endif
 }
 
-/**
- * @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
- **/
+<*
+ @require values::@is_int(x) || values::@is_float(x) "Expected an integer or floating point value"
+*>
 macro asinh(x)
 {
 	$if @typeid(x) == float.typeid:
@@ -243,121 +284,121 @@ macro asinh(x)
 	$endif
 }
 
-/**
- * @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
- **/
+<*
+ @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
+*>
 macro ceil(x) => $$ceil(x);
 
-/**
- * Constrain the value to lie within the given interval.
- *
- * @param x "the value to clamp, may be a number or a numerical vector."
- * @param lower "the lower bounds"
- * @param upper "the upper bounds"
- * @return "lower if x < lower, upper if x > upper, otherwise return x."
- *
- * @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
- * @require values::@assign_to(lower, x) `The lower bound must be convertable to the value type.`
- * @require values::@assign_to(upper, x) `The upper bound must be convertable to the value type.`
- **/
+<*
+ Constrain the value to lie within the given interval.
+
+ @param x "the value to clamp, may be a number or a numerical vector."
+ @param lower "the lower bounds"
+ @param upper "the upper bounds"
+ @return "lower if x < lower, upper if x > upper, otherwise return x."
+
+ @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
+ @require values::@assign_to(lower, x) `The lower bound must be convertable to the value type.`
+ @require values::@assign_to(upper, x) `The upper bound must be convertable to the value type.`
+*>
 macro clamp(x, lower, upper) => $$max(($typeof(x))lower, $$min(x, ($typeof(x))upper));
 
-/**
- * @require values::@is_promotable_to_floatlike(mag) `The input must be a number value or float vector`
- * @require values::@assign_to(sgn, values::promote_int(mag))
- **/
+<*
+ @require values::@is_promotable_to_floatlike(mag) `The input must be a number value or float vector`
+ @require $defined(($typeof(values::promote_int(mag)))mag) `It's not possible to cast the sign to the type of the magnitude`
+*>
 macro copysign(mag, sgn) => $$copysign(values::promote_int_same(mag, sgn), ($typeof(values::promote_int_same(mag, sgn)))sgn);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
-macro cos(x) => $$cos(x);
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
+macro cos(x) => $$cos(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro cosec(x) => 1 / sin(x);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro cosech(x) => 2 / (exp(x) - exp(-x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro cosh(x) => (exp(x) + exp(-x)) / 2.0;
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro cotan(x) => cos(x) / sin(x);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro cotanh(x) => (exp(2.0 * x) + 1.0) / (exp(2.0 * x) - 1.0);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro exp(x) => $$exp(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro exp2(x) => $$exp2(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number value or float vector`
+*>
 macro floor(x) => $$floor(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(a) `The input must be a number or float vector`
- * @require values::@is_promotable_to_floatlike(b) `The input must be a number or float vector`
- * @require values::@is_promotable_to_floatlike(c) `The input must be a number or float vector`
- * @require values::@is_same_vector_type(a, b) `The input types must be equal`
- * @require values::@is_same_vector_type(a, c) `The input types must match`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(a) `The input must be a number or float vector`
+ @require values::@is_promotable_to_floatlike(b) `The input must be a number or float vector`
+ @require values::@is_promotable_to_floatlike(c) `The input must be a number or float vector`
+ @require values::@is_same_vector_type(a, b) `The input types must be equal`
+ @require values::@is_same_vector_type(a, c) `The input types must match`
+*>
 macro fma(a, b, c) => $$fma(a, b, c);
 
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- * @require values::@is_promotable_to_floatlike(y) `The input must be a number or a float vector`
- * @require values::@is_same_vector_type(x, y) `The input types must match`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+ @require values::@is_promotable_to_floatlike(y) `The input must be a number or a float vector`
+ @require values::@is_same_vector_type(x, y) `The input types must match`
+*>
 macro hypot(x, y) => sqrt(sqr(x) + sqr(y));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro ln(x) => $$log(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- * @require values::@is_promotable_to_floatlike(base) `The base must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+ @require values::@is_promotable_to_floatlike(base) `The base must be a number or a float vector`
+*>
 macro log(x, base)
 {
 	return $$log(values::promote_int_same(x, base)) / $$log(values::promote_int_same(base, x));
 }
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro log2(x) => $$log2(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro log10(x) => $$log10(values::promote_int(x));
 
-/**
- * @require types::is_numerical($typeof(x)) `The input must be a floating point value or float vector`
- * @require types::is_same($typeof(x), $typeof(y)) `The input types must be equal`
- **/
+<*
+ @require types::is_numerical($typeof(x)) `The input must be a floating point value or float vector`
+ @require types::is_same($typeof(x), $typeof(y)) `The input types must be equal`
+*>
 macro max(x, y, ...)
 {
 	$if $vacount == 0:
@@ -365,16 +406,16 @@ macro max(x, y, ...)
 	$else
 		var m = $$max(x, y);
 		$for (var $i = 0; $i < $vacount; $i++)
-			m = $$max(m, $vaarg($i));
+			m = $$max(m, $vaarg[$i]);
 		$endfor
 		return m;
 	$endif
 }
 
-/**
- * @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
- * @require types::is_same($typeof(x), $typeof(y)) `The input types must be equal`
- **/
+<*
+ @require types::is_numerical($typeof(x)) `The input must be a numerical value or numerical vector`
+ @require types::is_same($typeof(x), $typeof(y)) `The input types must be equal`
+*>
 macro min(x, y, ...)
 {
 	$if $vacount == 0:
@@ -382,27 +423,27 @@ macro min(x, y, ...)
 	$else
 		var m = $$min(x, y);
 		$for (var $i = 0; $i < $vacount; $i++)
-			m = $$min(m, $vaarg($i));
+			m = $$min(m, $vaarg[$i]);
 		$endfor
 		return m;
 	$endif
 }
 
-/**
- * @require types::@is_float(a) `The input must be a floating point value`
- * @require types::@has_same(a, b, c) `The input types must be equal`
- **/
+<*
+ @require types::@is_float(a) `The input must be a floating point value`
+ @require types::@has_same(a, b, c) `The input types must be equal`
+*>
 macro muladd(a, b, c) => $$fmuladd(a, b, c);
 
-/**
- * @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
- **/
+<*
+ @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
+*>
 macro nearbyint(x) => $$nearbyint(x);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- * @require $assignable(exp, $typeof(values::promote_int(x))) || values::@is_int(exp) `The input must be an integer, castable to the type of x`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+ @require $assignable(exp, $typeof(values::promote_int(x))) || values::@is_int(exp) `The input must be an integer, castable to the type of x`
+*>
 macro pow(x, exp)
 {
 	$if types::is_floatlike($typeof(exp)):
@@ -412,9 +453,9 @@ macro pow(x, exp)
 	$endif
 }
 
-/**
- * @require values::@is_promotable_to_float(x) : `The input must be integer or floating type`
- **/
+<*
+ @require values::@is_promotable_to_float(x) : `The input must be integer or floating type`
+*>
 macro frexp(x, int* e)
 {
 	$switch ($typeof(x))
@@ -426,9 +467,9 @@ macro frexp(x, int* e)
 	$endswitch
 }
 
-/**
- * @require values::@is_promotable_to_float(x) : `The input must be integer or floating type`
- **/
+<*
+ @require values::@is_promotable_to_float(x) : `The input must be integer or floating type`
+*>
 macro int signbit(x)
 {
 	$switch ($typeof(x))
@@ -440,64 +481,64 @@ macro int signbit(x)
 	$endswitch
 }
 
-/**
- * @require values::@is_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_floatlike(x) `The input must be a number or a float vector`
+*>
 macro rint(x) => $$rint(x);
 
-/**
- * @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
- **/
+<*
+ @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
+*>
 macro round(x) => $$round(x);
 
 
-/**
- * @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
- **/
+<*
+ @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
+*>
 macro round_to_decimals(x, int decimal_places)
 {
   var div = $$pow_int(($typeof(x))10, decimal_places);
   return round(div * x) / div;
 }
 
-/**
- * @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
- **/
+<*
+ @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
+*>
 macro roundeven(x) => $$roundeven(x);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro sec(x) => 1 / cos(x);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro sech(x) => 2 / (exp(x) + exp(-x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro sin(x) => $$sin(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro sinh(x) => (exp(x) - exp(-x)) / 2.0;
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro sqr(x) => values::promote_int(x) * values::promote_int(x);
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro sqrt(x) => $$sqrt(values::promote_int(x));
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro tan(x)
 {
 	var $Type = $typeof(x);
@@ -511,9 +552,9 @@ macro tan(x)
 	$endswitch
 }
 
-/**
- * @require values::@is_promotable_to_float(x) `The input must be a float`
- **/
+<*
+ @require values::@is_promotable_to_float(x) `The input must be a float`
+*>
 macro bool is_finite(x)
 {
 	$switch ($typeof(x))
@@ -525,9 +566,9 @@ macro bool is_finite(x)
 	$endswitch
 }
 
-/**
- * @require values::@is_promotable_to_float(x) `The input must be a float`
- **/
+<*
+ @require values::@is_promotable_to_float(x) `The input must be a float`
+*>
 macro is_nan(x)
 {
 	$switch ($typeof(x))
@@ -539,9 +580,9 @@ macro is_nan(x)
 	$endswitch
 }
 
-/**
- * @require values::@is_promotable_to_float(x) `The input must be a float`
- **/
+<*
+ @require values::@is_promotable_to_float(x) `The input must be a float`
+*>
 macro is_inf(x)
 {
 	$switch ($typeof(x))
@@ -553,14 +594,14 @@ macro is_inf(x)
 	$endswitch
 }
 
-/**
- * @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
- **/
+<*
+ @require values::@is_promotable_to_floatlike(x) `The input must be a number or a float vector`
+*>
 macro tanh(x) => (exp(2.0 * x) - 1.0) / (exp(2.0 * x) + 1.0);
 
-/**
- * @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
- **/
+<*
+ @require values::@is_floatlike(x) `The input must be a floating point value or float vector`
+*>
 macro trunc(x) => $$trunc(x);
 
 macro lerp(x, y, amount) @private => x + (y - x) * amount;
@@ -576,18 +617,18 @@ macro normalize(x) @private
 	return x * (1 / len);
 }
 
-/**
- * Use a mask to select values from either "then" or "else" vectors.
- *
- * @param mask "The mask to use for the select, 'true' will pick the then_value, 'false' the else_value"
- * @param then_value "The vector to get elements from where the mask is 'true'"
- * @param else_value "The vector to get elements from where the mask is 'false'"
- * @require values::@is_vector(then_value) && values::@is_vector(else_value) "'Then' and 'else' must be vectors."
- * @require values::@is_same_type(then_value, else_value) "'Then' and 'else' vectors must be of the same type."
- * @require then_value.len == mask.len "Mask and selected vectors must be of the same width."
- *
- * @return "a vector of the same type as then/else"
- **/
+<*
+ Use a mask to select values from either "then" or "else" vectors.
+
+ @param mask "The mask to use for the select, 'true' will pick the then_value, 'false' the else_value"
+ @param then_value "The vector to get elements from where the mask is 'true'"
+ @param else_value "The vector to get elements from where the mask is 'false'"
+ @require values::@is_vector(then_value) && values::@is_vector(else_value) "'Then' and 'else' must be vectors."
+ @require values::@is_same_type(then_value, else_value) "'Then' and 'else' vectors must be of the same type."
+ @require then_value.len == mask.len "Mask and selected vectors must be of the same width."
+
+ @return "a vector of the same type as then/else"
+*>
 macro select(bool[<*>] mask, then_value, else_value)
 {
 	return $$select(mask, then_value, else_value);
@@ -932,14 +973,14 @@ macro int128 int128.sat_shl(int128 x, int128 y) => $$sat_shl(x, y);
 macro int128! int128.overflow_add(int128 x, int128 y) => overflow_add_helper(x, y);
 macro int128! int128.overflow_sub(int128 x, int128 y) => overflow_sub_helper(x, y);
 macro int128! int128.overflow_mul(int128 x, int128 y) => overflow_mul_helper(x, y);
-/**
- * @require values::@is_int(x) `The input must be an integer`
- **/
+<*
+ @require values::@is_int(x) `The input must be an integer`
+*>
 macro bool is_odd(x) => (bool)(x & 1);
 
-/**
- * @require values::@is_int(x) `The input must be an integer`
- **/
+<*
+ @require values::@is_int(x) `The input must be an integer`
+*>
 macro bool is_even(x) => !is_odd(x);
 
 macro bool char.is_even(char x) => is_even(x);
@@ -972,9 +1013,9 @@ macro bool uint128.is_odd(uint128 x) => is_odd(x);
 macro bool int128.is_even(int128 x) => is_even(x);
 macro bool int128.is_odd(int128 x) => is_odd(x);
 
-/**
- * @require types::is_underlying_int($typeof(x)) : `is_power_of_2 may only be used on integer types`
- */
+<*
+ @require types::is_underlying_int($typeof(x)) : `is_power_of_2 may only be used on integer types`
+*>
 macro bool is_power_of_2(x)
 {
 	return x != 0 && (x & (x - 1)) == 0;
@@ -1001,6 +1042,21 @@ macro uint double.high_word(double d) => (uint)(bitcast(d, ulong) >> 32);
 macro uint double.low_word(double d) => (uint)bitcast(d, ulong);
 macro uint float.word(float d) => bitcast(d, uint);
 
+macro void double.set_high_word(double* d, uint u)
+{
+	ulong rep = bitcast(*d, ulong);
+	rep = ((ulong)u << 32) | (rep & 0xffffffff);
+	*d = bitcast(rep, double);
+}
+
+macro void double.set_low_word(double* d, uint u)
+{
+	ulong rep = bitcast(*d, ulong);
+	rep = (rep & 0xffffffff00000000) | (ulong)u;
+	*d = bitcast(rep, double);
+}
+
+macro void float.set_word(float* f, uint u) => *f = bitcast(u, float);
 
 macro double scalbn(double x, int n) => _scalbn(x, n);
 
@@ -1008,8 +1064,10 @@ extern fn double _atan(double x) @extern("atan");
 extern fn float _atanf(float x) @extern("atanf");
 extern fn double _atan2(double, double) @extern("atan2");
 extern fn float _atan2f(float, float) @extern("atan2f");
-extern fn void _sincos(double, double*) @extern("sincos");
-extern fn void _sincosf(float, float*) @extern("sincosf");
+extern fn void _sincos(double, double*, double*) @extern("__sincos") @link("m") @if(env::DARWIN);
+extern fn void _sincosf(float, float*, float*) @extern("__sincosf") @link("m") @if(env::DARWIN);
+extern fn void _sincos(double, double*, double*) @extern("sincos") @link("m") @if(!env::DARWIN);
+extern fn void _sincosf(float, float*, float*) @extern("sincosf") @link("m") @if(!env::DARWIN);
 extern fn double _tan(double x) @extern("tan");
 extern fn float _tanf(float x) @extern("tanf");
 extern fn double _scalbn(double x, int n) @extern("scalbn");
@@ -1095,4 +1153,129 @@ macro overflow_mul_helper(x, y) @local
 	$typeof(x) res @noinit;
 	if ($$overflow_mul(x, y, &res)) return MathError.OVERFLOW?;
 	return res;
+}
+
+macro mul_div_helper(val, mul, div) @private
+{
+	var $Type = $typeof(val);
+	return ($Type)(($Type)mul * (val / ($Type)div) + ($Type)mul * (val % ($Type)div) / ($Type)div);
+}
+macro char char.muldiv(self, char mul, char div) => mul_div_helper(self, mul, div);
+macro ichar ichar.muldiv(self, ichar mul, ichar div) => mul_div_helper(self, mul, div);
+macro short short.muldiv(self, short mul, short div) => mul_div_helper(self, mul, div);
+macro ushort ushort.muldiv(self, ushort mul, ushort div) => mul_div_helper(self, mul, div);
+macro int int.muldiv(self, int mul, int div) => mul_div_helper(self, mul, div);
+macro uint uint.muldiv(self, uint mul, uint div) => mul_div_helper(self, mul, div);
+macro long long.muldiv(self, long mul, long div) => mul_div_helper(self, mul, div);
+macro ulong ulong.muldiv(self, ulong mul, ulong div) => mul_div_helper(self, mul, div);
+
+macro bool @is_same_vector_or_scalar(#vector_value, #vector_or_scalar) @private
+{
+	return (values::@is_vector(#vector_or_scalar) &&& values::@is_same_vector_type(#vector_value, #vector_or_scalar)) ||| values::@is_int(#vector_or_scalar);
+}
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro char[<*>] char[<*>].muldiv(self, mul, div)  => mul_div_helper(self, mul, div);
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro ichar[<*>] ichar[<*>].muldiv(self, mul, div)  => mul_div_helper(self, mul, div);
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro short[<*>] short[<*>].muldiv(self, mul, div) => mul_div_helper(self, mul, div);
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro ushort[<*>] ushort[<*>].muldiv(self, mul, div) => mul_div_helper(self, mul, div);
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro int[<*>] int[<*>].muldiv(self, mul, div) => mul_div_helper(self, mul, div);
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro uint[<*>] uint[<*>].muldiv(self, mul, div) => mul_div_helper(self, mul, div);
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro long[<*>] long[<*>].muldiv(self, mul, div) => mul_div_helper(self, mul, div);
+
+<*
+ @require @is_same_vector_or_scalar(self, mul) `mul must be a vector of the same type as self, or be an integer scalar`
+ @require @is_same_vector_or_scalar(self, div) `div must be a vector of the same type as self, or be an integer scalar`
+*>
+macro ulong[<*>] ulong[<*>].muldiv(self, mul, div) => mul_div_helper(self, mul, div);
+
+<*
+@require types::is_int($typeof(a)) `The input must be an integer`
+@require types::is_int($typeof(b)) `The input must be an integer`
+*>
+macro _gcd(a, b) @private
+{
+	if (a == 0) return b;
+	if (b == 0) return a;
+
+	var $Type = $typeof(a);
+	$Type r, aa, ab;
+	aa = abs(a);
+	ab = abs(b);
+	while (ab != 0)
+	{
+		r = aa % ab;
+		aa = ab;
+		ab = r;
+	}
+	return aa;
+}
+
+<*
+Calculate the least common multiple for the provided arguments.
+
+@require $vacount >= 2 `At least two arguments are required.`
+*>
+macro lcm(...)
+{
+	$typeof($vaarg[0]) result = $vaarg[0];
+	$for (var $i = 1; $i < $vacount; $i++)
+		$if $defined(result.lcm):
+			result = result.lcm($vaarg[$i]);
+		$else
+			result = (abs($vaarg[$i]) * abs(result)) / (_gcd($vaarg[$i], result));
+		$endif
+	$endfor
+	return result;
+}
+
+<*
+Calculate the greatest common divisor for the provided arguments.
+
+@require $vacount >= 2 `At least two arguments are required.`
+*>
+macro gcd(...)
+{
+	$typeof($vaarg[0]) result = $vaarg[0];
+	$for (var $i = 1; $i < $vacount; $i++)
+		$if $defined(result.gcd):
+			result = result.gcd($vaarg[$i]);
+		$else
+			result = _gcd($vaarg[$i], result);
+		$endif
+	$endfor
+	return result;
 }

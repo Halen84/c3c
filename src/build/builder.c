@@ -73,7 +73,6 @@ bool command_accepts_files(CompilerCommand command)
 		case COMMAND_UNIT_TEST:
 			return true;
 		case COMMAND_MISSING:
-		case COMMAND_GENERATE_HEADERS:
 		case COMMAND_INIT:
 		case COMMAND_INIT_LIB:
 		case COMMAND_BUILD:
@@ -87,11 +86,44 @@ bool command_accepts_files(CompilerCommand command)
 		case COMMAND_BENCHMARK:
 		case COMMAND_TEST:
 		case COMMAND_VENDOR_FETCH:
+		case COMMAND_PROJECT:
 			return false;
 	}
 	UNREACHABLE
 }
 
+bool command_passes_args(CompilerCommand command)
+{
+	switch (command)
+	{
+		case COMMAND_CLEAN_RUN:
+		case COMMAND_COMPILE_RUN:
+		case COMMAND_RUN:
+		case COMMAND_BENCHMARK:
+		case COMMAND_TEST:
+			return true;
+		case COMMAND_COMPILE:
+		case COMMAND_COMPILE_ONLY:
+		case COMMAND_DYNAMIC_LIB:
+		case COMMAND_STATIC_LIB:
+		case COMMAND_COMPILE_BENCHMARK:
+		case COMMAND_COMPILE_TEST:
+		case COMMAND_UNIT_TEST:
+		case COMMAND_MISSING:
+		case COMMAND_INIT:
+		case COMMAND_INIT_LIB:
+		case COMMAND_BUILD:
+		case COMMAND_CLEAN:
+		case COMMAND_DIST:
+		case COMMAND_DOCS:
+		case COMMAND_BENCH:
+		case COMMAND_PRINT_SYNTAX:
+		case COMMAND_VENDOR_FETCH:
+		case COMMAND_PROJECT:
+			return false;
+	}
+	UNREACHABLE
+}
 
 void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting level)
 {
@@ -105,7 +137,7 @@ void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting
 	AutoVectorization slp_vectorization = VECTORIZATION_OFF;
 	MergeFunctions merge_functions = MERGE_FUNCTIONS_OFF;
 	ShowBacktrace show_backtrace = SHOW_BACKTRACE_ON;
-	bool single_module = false;
+	SingleModule single_module = SINGLE_MODULE_OFF;
 	FpOpt fp_opt = FP_STRICT;
 	switch (level)
 	{
@@ -129,7 +161,7 @@ void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting
 			merge_functions = MERGE_FUNCTIONS_ON;
 			optlevel = OPTIMIZATION_MORE;
 			safety_level = SAFETY_OFF;
-			single_module = true;
+			single_module = SINGLE_MODULE_ON;
 			slp_vectorization = VECTORIZATION_ON;
 			unroll_loops = UNROLL_LOOPS_ON;
 			vectorization = VECTORIZATION_ON;
@@ -140,7 +172,7 @@ void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting
 			optlevel = OPTIMIZATION_AGGRESSIVE;
 			panic_level = PANIC_OFF;
 			safety_level = SAFETY_OFF;
-			single_module = true;
+			single_module = SINGLE_MODULE_ON;
 			slp_vectorization = VECTORIZATION_ON;
 			unroll_loops = UNROLL_LOOPS_ON;
 			vectorization = VECTORIZATION_ON;
@@ -151,7 +183,7 @@ void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting
 			optlevel = OPTIMIZATION_AGGRESSIVE;
 			panic_level = PANIC_OFF;
 			safety_level = SAFETY_OFF;
-			single_module = true;
+			single_module = SINGLE_MODULE_ON;
 			slp_vectorization = VECTORIZATION_ON;
 			unroll_loops = UNROLL_LOOPS_ON;
 			vectorization = VECTORIZATION_ON;
@@ -173,7 +205,7 @@ void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting
 			panic_level = PANIC_OFF;
 			safety_level = SAFETY_OFF;
 			show_backtrace = SHOW_BACKTRACE_OFF;
-			single_module = true;
+			single_module = SINGLE_MODULE_ON;
 			slp_vectorization = VECTORIZATION_ON;
 			vectorization = VECTORIZATION_OFF;
 			break;
@@ -181,19 +213,58 @@ void update_build_target_with_opt_level(BuildTarget *target, OptimizationSetting
 		default:
 			UNREACHABLE
 	}
-	if (target->optsize == SIZE_OPTIMIZATION_NOT_SET) target->optsize = optsize;
-	if (target->optlevel == OPTIMIZATION_NOT_SET) target->optlevel = optlevel;
-	if (target->show_backtrace == SHOW_BACKTRACE_NOT_SET) target->show_backtrace = show_backtrace;
-	if (target->feature.safe_mode == SAFETY_NOT_SET) target->feature.safe_mode = safety_level;
-	if (target->feature.panic_level == PANIC_NOT_SET) target->feature.panic_level = panic_level;
-	if (target->debug_info == DEBUG_INFO_NOT_SET) target->debug_info = debug;
-	if (target->feature.fp_math == FP_DEFAULT) target->feature.fp_math = fp_opt;
-	if (target->single_module == SINGLE_MODULE_NOT_SET && single_module) target->single_module = SINGLE_MODULE_ON;
-	if (target->unroll_loops == UNROLL_LOOPS_NOT_SET) target->unroll_loops = unroll_loops;
-	if (target->merge_functions == MERGE_FUNCTIONS_NOT_SET) target->merge_functions = merge_functions;
-	if (target->slp_vectorization == VECTORIZATION_NOT_SET) target->slp_vectorization = slp_vectorization;
-	if (target->loop_vectorization == VECTORIZATION_NOT_SET) target->loop_vectorization = vectorization;
+	COPY_IF_DEFAULT(target->optsize, optsize);
+	COPY_IF_DEFAULT(target->optlevel, optlevel);
+	COPY_IF_DEFAULT(target->show_backtrace, show_backtrace);
+	COPY_IF_DEFAULT(target->feature.safe_mode, safety_level);
+	COPY_IF_DEFAULT(target->feature.panic_level, panic_level);
+	COPY_IF_DEFAULT(target->debug_info, debug);
+	COPY_IF_DEFAULT(target->feature.fp_math, fp_opt);
+	COPY_IF_DEFAULT(target->unroll_loops, unroll_loops);
+	COPY_IF_DEFAULT(target->merge_functions, merge_functions);
+	COPY_IF_DEFAULT(target->slp_vectorization, slp_vectorization);
+	COPY_IF_DEFAULT(target->loop_vectorization, vectorization);
+	COPY_IF_DEFAULT(target->single_module, single_module);
 }
+
+static LinkLibc libc_from_arch_os(ArchOsTarget target)
+{
+	switch (target)
+	{
+		case ANDROID_AARCH64:
+		case FREEBSD_X86:
+		case FREEBSD_X64:
+		case IOS_AARCH64:
+		case LINUX_AARCH64:
+		case LINUX_RISCV32:
+		case LINUX_RISCV64:
+		case LINUX_X86:
+		case LINUX_X64:
+		case MACOS_AARCH64:
+		case MACOS_X64:
+		case MINGW_X64:
+		case NETBSD_X86:
+		case NETBSD_X64:
+		case OPENBSD_X86:
+		case OPENBSD_X64:
+		case WINDOWS_AARCH64:
+		case WINDOWS_X64:
+		case ARCH_OS_TARGET_DEFAULT:
+			return LINK_LIBC_ON;
+		case WASM32:
+		case WASM64:
+		case MCU_X86:
+		case ELF_AARCH64:
+		case ELF_RISCV32:
+		case ELF_RISCV64:
+		case ELF_X86:
+		case ELF_X64:
+		case ELF_XTENSA:
+			return LINK_LIBC_OFF;
+	}
+	UNREACHABLE
+}
+
 static void update_build_target_from_options(BuildTarget *target, BuildOptions *options)
 {
 	switch (options->command)
@@ -202,17 +273,20 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 		case COMMAND_BENCHMARK:
 			target->run_after_compile = true;
 			target->type = TARGET_TYPE_BENCHMARK;
+			target->args = options->args;
 			break;
 		case COMMAND_COMPILE_TEST:
 		case COMMAND_TEST:
 			target->run_after_compile = true;
 			target->type = TARGET_TYPE_TEST;
+			target->args = options->args;
 			break;
 		case COMMAND_RUN:
 		case COMMAND_COMPILE_RUN:
 		case COMMAND_CLEAN_RUN:
 			target->run_after_compile = true;
 			target->delete_after_run = options->run_once;
+			target->args = options->args;
 			break;
 		case COMMAND_COMPILE_ONLY:
 			target->type = TARGET_TYPE_OBJECT_FILES;
@@ -223,6 +297,7 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 			break;
 		case COMMAND_STATIC_LIB:
 			target->type = TARGET_TYPE_STATIC_LIB;
+			target->single_module = true;
 			break;
 		default:
 			target->run_after_compile = false;
@@ -234,7 +309,8 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 		case COMMAND_BUILD:
 			target->output_headers = (target->type == TARGET_TYPE_DYNAMIC_LIB || target->type == TARGET_TYPE_STATIC_LIB) && !options->no_headers;
 			break;
-		case COMMAND_GENERATE_HEADERS:
+		case COMMAND_STATIC_LIB:
+		case COMMAND_DYNAMIC_LIB:
 			target->output_headers = true;
 			break;
 		default:
@@ -251,7 +327,7 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 		{
 			if (str_eq(feature, remove_feature))
 			{
-				vec_erase_ptr_at(target->feature_list, i);
+				vec_erase_at(target->feature_list, i);
 				break;
 			}
 		}
@@ -280,26 +356,29 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 	if (options->merge_functions != MERGE_FUNCTIONS_NOT_SET) target->merge_functions = options->merge_functions;
 	if (options->loop_vectorization != VECTORIZATION_NOT_SET) target->loop_vectorization = options->loop_vectorization;
 	if (options->slp_vectorization != VECTORIZATION_NOT_SET) target->slp_vectorization = options->slp_vectorization;
+	if (options->validation_level != VALIDATION_LENIENT) target->validation_level = options->validation_level;
 	if (options->safety_level != SAFETY_NOT_SET) target->feature.safe_mode = options->safety_level;
 	if (options->panic_level != PANIC_NOT_SET) target->feature.panic_level = options->panic_level;
 	if (options->strip_unused != STRIP_UNUSED_NOT_SET) target->strip_unused = options->strip_unused;
 	if (options->memory_environment != MEMORY_ENV_NOT_SET) target->memory_environment = options->memory_environment;
 	if (options->debug_info_override != DEBUG_INFO_NOT_SET) target->debug_info = options->debug_info_override;
 	if (options->show_backtrace != SHOW_BACKTRACE_NOT_SET) target->show_backtrace = options->show_backtrace;
+	if (options->old_test != OLD_TEST_NOT_SET) target->old_test = options->old_test;
 	if (options->arch_os_target_override != ARCH_OS_TARGET_DEFAULT) target->arch_os_target = options->arch_os_target_override;
 	if (options->reloc_model != RELOC_DEFAULT) target->reloc_model = options->reloc_model;
 	if (options->symtab_size) target->symtab_size = options->symtab_size;
-	target->print_linking = options->print_linking;
+	if (options->silence_deprecation) target->silence_deprecation = options->silence_deprecation || options->verbosity_level < 0;
+	target->print_linking = options->print_linking || options->verbosity_level > 1;
 
-	for (int i = 0; i < options->linker_arg_count; i++)
+	for (size_t i = 0; i < options->linker_arg_count; i++)
 	{
 		vec_add(target->link_args, options->linker_args[i]);
 	}
-	for (int i = 0; i < options->linker_lib_dir_count; i++)
+	for (size_t i = 0; i < options->linker_lib_dir_count; i++)
 	{
 		vec_add(target->linker_libdirs, options->linker_lib_dir[i]);
 	}
-	for (int i = 0; i < options->linker_lib_count; i++)
+	for (size_t i = 0; i < options->linker_lib_count; i++)
 	{
 		vec_add(target->linker_libs, options->linker_libs[i]);
 	}
@@ -319,23 +398,36 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 	target->emit_llvm = options->emit_llvm;
 	target->build_threads = options->build_threads;
 	target->emit_asm = options->emit_asm;
+	target->print_stats = options->verbosity_level >= 2;
 	if (options->output_dir) target->output_dir = options->output_dir;
 	if (options->panicfn) target->panicfn = options->panicfn;
 	if (options->testfn) target->testfn = options->testfn;
 	if (options->benchfn) target->benchfn = options->benchfn;
 	target->benchmarking = options->benchmarking;
 	target->testing = options->testing;
+	target->silent = options->verbosity_level < 0;
 	target->vector_conv = options->vector_conv;
 	if (options->macos.sysroot) target->macos.sysroot = options->macos.sysroot;
 	if (options->win.sdk) target->win.sdk = options->win.sdk;
+	if (options->win.vs_dirs) target->win.vs_dirs = options->win.vs_dirs;
 	if (options->macos.min_version) target->macos.min_version = options->macos.min_version;
 	if (options->macos.sdk_version) target->macos.sdk_version = options->macos.sdk_version;
 	if (options->win.crt_linking != WIN_CRT_DEFAULT) target->win.crt_linking = options->win.crt_linking;
 	if (options->linuxpaths.crt) target->linuxpaths.crt = options->linuxpaths.crt;
 	if (options->linuxpaths.crtbegin) target->linuxpaths.crtbegin = options->linuxpaths.crtbegin;
-	if (options->fp_math != FP_DEFAULT)
+	if (options->fp_math != FP_DEFAULT) target->feature.fp_math = options->fp_math;
+	switch (options->sanitize_mode)
 	{
-		target->feature.fp_math = options->fp_math;
+		case SANITIZE_NOT_SET: break;
+		case SANITIZE_NONE:
+			target->feature.sanitize_address = false;
+			target->feature.sanitize_memory = false;
+			target->feature.sanitize_thread = false;
+			break;
+		case SANITIZE_ADDRESS: target->feature.sanitize_address = true; break;
+		case SANITIZE_MEMORY: target->feature.sanitize_memory = true; break;
+		case SANITIZE_THREAD: target->feature.sanitize_thread = true; break;
+		default: UNREACHABLE;
 	}
 	if (options->x86_vector_capability != X86VECTOR_DEFAULT)
 	{
@@ -401,6 +493,13 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 		target->emit_asm = false;
 		target->emit_object_files = false;
 	}
+	if (options->lsp_mode)
+	{
+		target->lsp_output = true;
+		target->emit_llvm = false;
+		target->emit_asm = false;
+		target->emit_object_files = false;
+	}
 	if (options->test_mode)
 	{
 		target->test_output = true;
@@ -422,6 +521,10 @@ static void update_build_target_from_options(BuildTarget *target, BuildOptions *
 	}
 	if (target->optsetting == OPT_SETTING_NOT_SET) target->optsetting = OPT_SETTING_O0;
 	update_build_target_with_opt_level(target, target->optsetting);
+	if (target->link_libc == LINK_LIBC_NOT_SET)
+	{
+		target->link_libc = libc_from_arch_os(target->arch_os_target);
+	}
 }
 
 void init_default_build_target(BuildTarget *target, BuildOptions *options)
@@ -429,6 +532,7 @@ void init_default_build_target(BuildTarget *target, BuildOptions *options)
 	*target = default_build_target;
 	target->source_dirs = options->files;
 	target->name = options->output_name;
+	target->output_name = options->output_name;
 	update_build_target_from_options(target, options);
 }
 
@@ -438,8 +542,9 @@ void init_build_target(BuildTarget *target, BuildOptions *options)
 	// Locate the project.json
 	file_find_top_dir();
 	// Parse it
-	Project *project = project_load();
-	*target = *project_select_target(project, options->target_select);
+	const char *filename;
+	Project *project = project_load(&filename);
+	*target = *project_select_target(filename, project, options->target_select);
 
 	update_build_target_from_options(target, options);
 	if (target->build_dir && !file_exists(target->build_dir))

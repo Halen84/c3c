@@ -11,10 +11,10 @@ def NativeConditionVariable = Pthread_cond_t;
 def NativeThread = Pthread_t;
 def NativeOnceFlag = Pthread_once_t;
 
-/**
- * @require !self.is_initialized() : "Mutex is already initialized"
- * @ensure self.is_initialized()
- **/
+<*
+ @require !self.is_initialized() : "Mutex is already initialized"
+ @ensure self.is_initialized()
+*>
 fn void! NativeMutex.init(&self, MutexType type)
 {
 	Pthread_mutexattr_t attr;
@@ -23,6 +23,12 @@ fn void! NativeMutex.init(&self, MutexType type)
 	if (type & thread::MUTEX_RECURSIVE)
 	{
 		if (posix::pthread_mutexattr_settype(&attr, posix::PTHREAD_MUTEX_RECURSIVE)) return ThreadFault.INIT_FAILED?;
+	}
+	else
+	{
+		$if env::COMPILER_SAFE_MODE:
+			if (posix::pthread_mutexattr_settype(&attr, posix::PTHREAD_MUTEX_ERRORCHECK)) return ThreadFault.INIT_FAILED?;
+		$endif
 	}
 	if (posix::pthread_mutex_init(&self.mutex, &attr)) return ThreadFault.INIT_FAILED?;
 	self.initialized = true;
@@ -33,27 +39,27 @@ fn bool NativeMutex.is_initialized(&self)
 	return self.initialized;
 }
 
-/**
- * @require self.is_initialized() : "Mutex was not initialized"
- * @ensure !self.is_initialized()
- **/
+<*
+ @require self.is_initialized() : "Mutex was not initialized"
+ @ensure !self.is_initialized()
+*>
 fn void! NativeMutex.destroy(&self)
 {
 	if (posix::pthread_mutex_destroy(&self.mutex)) return ThreadFault.DESTROY_FAILED?;
 	*self = {};
 }
 
-/**
- * @require self.is_initialized() : "Mutex was not initialized"
- **/
+<*
+ @require self.is_initialized() : "Mutex was not initialized"
+*>
 fn void! NativeMutex.lock(&self)
 {
 	if (posix::pthread_mutex_lock(&self.mutex)) return ThreadFault.LOCK_FAILED?;
 }
 
-/**
- * @require self.is_initialized() : "Mutex was not initialized"
- **/
+<*
+ @require self.is_initialized() : "Mutex was not initialized"
+*>
 fn void! NativeMutex.lock_timeout(&self, ulong ms)
 {
 	/* Try to acquire the lock and, if we fail, sleep for 5ms. */
@@ -77,17 +83,17 @@ fn void! NativeMutex.lock_timeout(&self, ulong ms)
 	}
 }
 
-/**
- * @require self.is_initialized() : "Mutex was not initialized"
- **/
+<*
+ @require self.is_initialized() : "Mutex was not initialized"
+*>
 fn bool NativeMutex.try_lock(&self)
 {
 	return !posix::pthread_mutex_trylock(&self.mutex);
 }
 
-/**
- * @require self.is_initialized() : "Mutex was not initialized"
- **/
+<*
+ @require self.is_initialized() : "Mutex was not initialized"
+*>
 fn void! NativeMutex.unlock(&self)
 {
 	if (posix::pthread_mutex_unlock(&self.mutex)) return ThreadFault.UNLOCK_FAILED?;
@@ -113,17 +119,17 @@ fn void! NativeConditionVariable.broadcast(&cond)
 	if (posix::pthread_cond_broadcast(cond)) return ThreadFault.SIGNAL_FAILED?;
 }
 
-/**
- * @require mtx.is_initialized()
- **/
+<*
+ @require mtx.is_initialized()
+*>
 fn void! NativeConditionVariable.wait(&cond, NativeMutex* mtx)
 {
 	if (posix::pthread_cond_wait(cond, &mtx.mutex)) return ThreadFault.WAIT_FAILED?;
 }
 
-/**
- * @require mtx.is_initialized()
- **/
+<*
+ @require mtx.is_initialized()
+*>
 fn void! NativeConditionVariable.wait_timeout(&cond, NativeMutex* mtx, ulong ms)
 {
 	TimeSpec now;
@@ -142,17 +148,26 @@ fn void! NativeConditionVariable.wait_timeout(&cond, NativeMutex* mtx, ulong ms)
 	}
 }
 
+tlocal PosixThreadData *_thread_data @private;
 
+fn void free_thread_data() @private
+{
+	if (_thread_data)
+	{
+		allocator::free(_thread_data.allocator, _thread_data);
+		_thread_data = null;
+	}
+}
 fn void* callback(void* arg) @private
 {
-	PosixThreadData *data = arg;
-	return (void*)(iptr)data.thread_fn(data.arg);
+	_thread_data = arg;
+	defer free_thread_data();
+	return (void*)(iptr)_thread_data.thread_fn(_thread_data.arg);
 }
 
 fn void! NativeThread.create(&thread, ThreadFn thread_fn, void* arg)
 {
-
-	PosixThreadData *thread_data = mem::new(PosixThreadData, { .thread_fn = thread_fn, .arg = arg });
+	PosixThreadData *thread_data = mem::new(PosixThreadData, { .thread_fn = thread_fn, .arg = arg, .allocator = allocator::heap() });
 	if (posix::pthread_create(thread, null, &callback, thread_data) != 0)
 	{
 		*thread = null;
@@ -168,6 +183,7 @@ fn void! NativeThread.detach(thread)
 
 fn void native_thread_exit(int result)
 {
+	free_thread_data();
 	posix::pthread_exit((void*)(iptr)result);
 }
 
@@ -202,6 +218,7 @@ struct PosixThreadData @private
 {
 	ThreadFn thread_fn;
 	void* arg;
+	Allocator allocator;
 }
 
 fn void! native_sleep_nano(NanoDuration nano)

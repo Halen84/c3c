@@ -32,8 +32,8 @@ static inline bool matches_subpath(Path *path_to_check, Path *path_to_find)
 
 Decl *sema_decl_stack_resolve_symbol(const char *symbol)
 {
-	Decl **current = global_context.decl_stack_top;
-	Decl **end = global_context.decl_stack_bottom;
+	Decl **current = compiler.context.decl_stack_top;
+	Decl **end = compiler.context.decl_stack_bottom;
 	while (current > end)
 	{
 		Decl *decl = *(--current);
@@ -44,33 +44,50 @@ Decl *sema_decl_stack_resolve_symbol(const char *symbol)
 
 Decl **sema_decl_stack_store(void)
 {
-	Decl **current_bottom = global_context.decl_stack_bottom;
-	global_context.decl_stack_bottom = global_context.decl_stack_top;
+	Decl **current_bottom = compiler.context.decl_stack_bottom;
+	compiler.context.decl_stack_bottom = compiler.context.decl_stack_top;
 	return current_bottom;
 }
 
 void sema_decl_stack_restore(Decl **state)
 {
-	global_context.decl_stack_top = global_context.decl_stack_bottom;
-	global_context.decl_stack_bottom = state;
+	compiler.context.decl_stack_top = compiler.context.decl_stack_bottom;
+	compiler.context.decl_stack_bottom = state;
 }
 
 void sema_decl_stack_push(Decl *decl)
 {
-	Decl **current = global_context.decl_stack_top;
-	if (current == &global_context.decl_stack[MAX_GLOBAL_DECL_STACK])
+	Decl **current = compiler.context.decl_stack_top;
+	if (current == &compiler.context.decl_stack[MAX_GLOBAL_DECL_STACK])
 	{
 		error_exit("Declaration stack exhausted.");
 	}
 	*(current++) = decl;
-	global_context.decl_stack_top = current;
+	compiler.context.decl_stack_top = current;
 }
 
-static void add_members_to_decl_stack(Decl *decl)
+static bool add_interface_to_decl_stack(SemaContext *context, Decl *decl)
 {
-	FOREACH(Decl *, func, decl->methods)
+	if (!sema_analyse_decl(context, decl)) return false;
+	FOREACH(TypeInfo *, parent_interface, decl->interfaces)
 	{
-		sema_decl_stack_push(func);
+		ASSERT0(parent_interface->resolve_status == RESOLVE_DONE);
+		Decl *inf = parent_interface->type->decl;
+		if (!sema_analyse_decl(context, inf)) return false;
+		add_interface_to_decl_stack(context, inf);
+	}
+	FOREACH(Decl *, interface, decl->interface_methods) sema_decl_stack_push(interface);
+	return true;
+}
+
+static bool add_members_to_decl_stack(SemaContext *context, Decl *decl, FindMember find)
+{
+	if (find != FIELDS_ONLY)
+	{
+		FOREACH(Decl *, func, decl->methods)
+		{
+			sema_decl_stack_push(func);
+		}
 	}
 	while (decl->decl_kind == DECL_DISTINCT)
 	{
@@ -82,16 +99,9 @@ static void add_members_to_decl_stack(Decl *decl)
 	{
 		FOREACH(Decl *, member, decl->enums.parameters) sema_decl_stack_push(member);
 	}
-	if (decl->decl_kind == DECL_INTERFACE)
+	if (decl->decl_kind == DECL_INTERFACE && find != FIELDS_ONLY)
 	{
-		FOREACH(TypeInfo *, parent_interface, decl->interfaces)
-		{
-			FOREACH(Decl *, interface, parent_interface->type->decl->interface_methods)
-			{
-				sema_decl_stack_push(interface);
-			}
-		}
-		FOREACH(Decl *, interface, decl->interface_methods) sema_decl_stack_push(interface);
+		if (!add_interface_to_decl_stack(context, decl)) return false;
 	}
 	if (decl_is_struct_type(decl) || decl->decl_kind == DECL_BITSTRUCT)
 	{
@@ -99,18 +109,19 @@ static void add_members_to_decl_stack(Decl *decl)
 		{
 			if (member->name == NULL)
 			{
-				add_members_to_decl_stack(member);
+				if (!add_members_to_decl_stack(context, member, find)) return false;
 				continue;
 			}
 			sema_decl_stack_push(member);
 		}
 	}
+	return true;
 }
 
-Decl *sema_decl_stack_find_decl_member(Decl *decl_owner, const char *symbol)
+Decl *sema_decl_stack_find_decl_member(SemaContext *context, Decl *decl_owner, const char *symbol, FindMember find)
 {
 	Decl **state = sema_decl_stack_store();
-	add_members_to_decl_stack(decl_owner);
+	if (!add_members_to_decl_stack(context, decl_owner, find)) return poisoned_decl;
 	Decl *member = sema_decl_stack_resolve_symbol(symbol);
 	sema_decl_stack_restore(state);
 	return member;
@@ -125,7 +136,7 @@ static inline Decl *sema_find_decl_in_module(Module *module, Path *path, const c
 	return module_find_symbol(module, symbol);
 }
 
-static bool sema_find_decl_in_private_imports(SemaContext *context, NameResolve *name_resolve, bool want_generic)
+static bool sema_find_decl_in_imports(SemaContext *context, NameResolve *name_resolve, bool want_generic)
 {
 	Decl *decl = NULL;
 	// 1. Loop over imports.
@@ -134,14 +145,25 @@ static bool sema_find_decl_in_private_imports(SemaContext *context, NameResolve 
 	FOREACH(Decl *, import, context->unit->imports)
 	{
 		if (import->import.module->is_generic != want_generic) continue;
-		if (!import->import.import_private_as_public) continue;
+		bool is_private_import = import->import.import_private_as_public;
+		if (!path && (decl || !is_private_import)) continue;
 		// Is the decl in the import.
 		Decl *found = sema_find_decl_in_module(import->import.module, path, symbol, &name_resolve->path_found);
 
 		// No match, so continue
 		if (!found) continue;
 
-		assert(found->visibility != VISIBLE_LOCAL);
+		ASSERT0(found->visibility != VISIBLE_LOCAL);
+
+		if (found->visibility != VISIBLE_PUBLIC)
+		{
+			if (decl) continue;
+			if (!is_private_import)
+			{
+				name_resolve->private_decl = found;
+				continue;
+			}
+		}
 
 		// Did we already have a match?
 		if (decl)
@@ -212,6 +234,9 @@ static bool decl_is_visible(CompilationUnit *unit, Decl *decl)
 	// 1. Same module as unit -> ok
 	if (module == unit->module) return true;
 
+	// This never matches a generic module.
+	if (module->generic_module) return false;
+
 	// 2. Module inclusion: a is submodule of b or b of a.
 	if (module_inclusion_match(module, unit->module)) return true;
 
@@ -227,6 +252,7 @@ static bool decl_is_visible(CompilationUnit *unit, Decl *decl)
 	{
 		Module *import_module = import->import.module;
 		if (import_module == module) return true;
+		if (import->import.is_non_recurse) continue;
 		if (module_inclusion_match(import_module, module)) return true;
 	}
 	return false;
@@ -341,7 +367,7 @@ static bool sema_find_decl_in_global(SemaContext *context, DeclTable *table, Mod
 	// There might just be a single match.
 	if (decls->decl_kind != DECL_DECLARRAY)
 	{
-		if (path && !matches_subpath(decl_module(decls)->name, path)) return true;
+		if (path && !matches_subpath(decls->unit->module->name, path)) return true;
 		if (!decl_is_visible(context->unit, decls))
 		{
 			name_resolve->maybe_decl = decls;
@@ -359,7 +385,7 @@ static bool sema_find_decl_in_global(SemaContext *context, DeclTable *table, Mod
 	Decl *decl = NULL;
 	FOREACH(Decl *, candidate, decls->decl_list)
 	{
-		if (path && !matches_subpath(decl_module(candidate)->name, path)) continue;
+		if (path && !matches_subpath(candidate->unit->module->name, path)) continue;
 		if (!decl_is_visible(context->unit, candidate))
 		{
 			maybe_decl = candidate;
@@ -381,14 +407,14 @@ static bool sema_resolve_path_symbol(SemaContext *context, NameResolve *name_res
 	Decl *decl = NULL;
 	name_resolve->path_found = NULL;
 	name_resolve->found = NULL;
-	assert(name_resolve->path && "Expected path.");
+	ASSERT0(name_resolve->path && "Expected path.");
 
 	const char *symbol = name_resolve->symbol;
 	// 0. std module special handling.
-	if (path->module == global_context.std_module_path.module)
+	if (path->module == compiler.context.std_module_path.module)
 	{
-		name_resolve->path_found = &global_context.std_module;
-		name_resolve->found = module_find_symbol(&global_context.std_module, symbol);
+		name_resolve->path_found = &compiler.context.std_module;
+		name_resolve->found = module_find_symbol(&compiler.context.std_module, symbol);
 		return true;
 	}
 
@@ -403,11 +429,11 @@ static bool sema_resolve_path_symbol(SemaContext *context, NameResolve *name_res
 	}
 
 	// 3. Loop over imports.
-	if (!sema_find_decl_in_private_imports(context, name_resolve, false)) return false;
+	if (!sema_find_decl_in_imports(context, name_resolve, false)) return false;
 
 	// 4. Go to global search
 	if (name_resolve->found) return true;
-	return sema_find_decl_in_global(context, &global_context.symbols, global_context.module_list,
+	return sema_find_decl_in_global(context, &compiler.context.symbols, compiler.context.module_list,
 	                                name_resolve, false);
 }
 
@@ -452,7 +478,7 @@ static inline Decl *sema_find_local(SemaContext *context, const char *symbol)
 static bool sema_resolve_no_path_symbol(SemaContext *context, NameResolve *name_resolve)
 {
 	const char *symbol = name_resolve->symbol;
-	assert(name_resolve->path == NULL);
+	ASSERT0(name_resolve->path == NULL);
 
 	Decl *decl;
 
@@ -478,10 +504,10 @@ static bool sema_resolve_no_path_symbol(SemaContext *context, NameResolve *name_
 		return true;
 	}
 
-	if (!sema_find_decl_in_private_imports(context, name_resolve, false)) return false;
+	if (!sema_find_decl_in_imports(context, name_resolve, false)) return false;
 	if (name_resolve->found) return true;
 
-	return sema_find_decl_in_global(context, &global_context.symbols, NULL, name_resolve, false);
+	return sema_find_decl_in_global(context, &compiler.context.symbols, NULL, name_resolve, false);
 }
 
 #define MAX_TEST 256
@@ -520,10 +546,18 @@ static void find_closest(const char *name, int name_len, Decl **decls, int *coun
 {
 	int best_distance = *best_distance_ref;
 	int count = *count_ref;
+	bool starts_at = name[0] == '@';
+	Decl *at_match = NULL;
 	FOREACH(Decl *, decl, decls)
 	{
 		if (decl->visibility != VISIBLE_PUBLIC) continue;
-		int dist = damerau_levenshtein_distance(name, name_len, decl->name, strlen(decl->name));
+		const char *decl_name = decl->name;
+		if (!starts_at && decl_name[0] == '@' && str_eq(&decl_name[1], name))
+		{
+			at_match = decl;
+			continue;
+		}
+		int dist = damerau_levenshtein_distance(name, name_len, decl_name, strlen(decl_name));
 		if (dist < best_distance)
 		{
 			matches[0] = decl;
@@ -534,6 +568,17 @@ static void find_closest(const char *name, int name_len, Decl **decls, int *coun
 		if (dist == best_distance && count < 3)
 		{
 			matches[count++] = decl;
+		}
+	}
+	if (at_match)
+	{
+		if (count == 3)
+		{
+			matches[0] = at_match;
+		}
+		else
+		{
+			matches[count++] = at_match;
 		}
 	}
 	*count_ref = count;
@@ -557,7 +602,7 @@ static int module_closest_ident_names(Module *module, const char *name, Decl* ma
 }
 static void sema_report_error_on_decl(SemaContext *context, NameResolve *name_resolve)
 {
-	assert(!name_resolve->suppress_error);
+	ASSERT0(!name_resolve->suppress_error);
 	const char *symbol = name_resolve->symbol;
 	SourceSpan span = name_resolve->span;
 	Decl *found = name_resolve->found;
@@ -567,12 +612,12 @@ static void sema_report_error_on_decl(SemaContext *context, NameResolve *name_re
 		const char *private_name = decl_to_name(name_resolve->private_decl);
 		if (path_name)
 		{
-			sema_error_at(context, span, "The %s '%s::%s' is not visible from this module.",
+			sema_error_at(context, span, "The %s '%s::%s' is '@private' and not visible from other modules.",
 			              private_name, path_name,
 			              symbol);
 		} else
 		{
-			sema_error_at(context, span, "The %s '%s' is not visible from this module.",
+			sema_error_at(context, span, "The %s '%s' is '@private' and not visible from other modules.",
 			              private_name, symbol);
 		}
 		return;
@@ -580,7 +625,14 @@ static void sema_report_error_on_decl(SemaContext *context, NameResolve *name_re
 	if (!found && name_resolve->maybe_decl)
 	{
 		const char *maybe_name = decl_to_name(name_resolve->maybe_decl);
-		const char *module_name = decl_module(name_resolve->maybe_decl)->name->module;
+		if (name_resolve->maybe_decl->unit->module->generic_module)
+		{
+			const char *module_name = name_resolve->maybe_decl->unit->module->generic_module->name->module;
+			sema_error_at(context, span, "Did you mean the %s '%s' in the generic module %s? If so, use '%s(<...>)' instead.",
+			              maybe_name, symbol, module_name, symbol);
+			return;
+		}
+		const char *module_name = name_resolve->maybe_decl->unit->module->name->module;
 		if (path_name)
 		{
 			sema_error_at(context, span, "Did you mean the %s '%s::%s' in module %s? If so please add 'import %s'.",
@@ -596,10 +648,10 @@ static void sema_report_error_on_decl(SemaContext *context, NameResolve *name_re
 
 	if (name_resolve->ambiguous_other_decl)
 	{
-		assert(found);
+		ASSERT0(found);
 		const char *symbol_type = decl_to_name(found);
-		const char *found_path = decl_module(found)->name->module;
-		const char *other_path = decl_module(name_resolve->ambiguous_other_decl)->name->module;
+		const char *found_path = found->unit->module->name->module;
+		const char *other_path = name_resolve->ambiguous_other_decl->unit->module->name->module;
 		if (path_name)
 		{
 			sema_error_at(context, span,
@@ -624,7 +676,7 @@ static void sema_report_error_on_decl(SemaContext *context, NameResolve *name_re
 		}
 		return;
 	}
-	assert(!found);
+	ASSERT0(!found);
 	if (path_name)
 	{
 		// A common mistake is to type println and printfln
@@ -675,17 +727,29 @@ INLINE bool sema_resolve_symbol_common(SemaContext *context, NameResolve *name_r
 		{
 			if (name_resolve->suppress_error) return true;
 			Module *module_with_path = NULL;
-			FOREACH(Module *, module, global_context.module_list)
+			FOREACH(Module *, module, compiler.context.module_list)
 			{
 				if (matches_subpath(module->name, name_resolve->path))
 				{
-					module_with_path = module;
-					break;
+					FOREACH(Decl *, import, context->unit->imports)
+					{
+						Module *mod = module;
+						while (mod)
+						{
+							if (import->import.module == mod)
+							{
+								module_with_path = module;
+								goto MOD_FOUND;
+							}
+							mod = mod->parent_module;
+						}
+					}
 				}
 			}
+MOD_FOUND:
 			if (!module_with_path)
 			{
-				FOREACH(Module *, module, global_context.generic_module_list)
+				FOREACH(Module *, module, compiler.context.generic_module_list)
 				{
 					if (matches_subpath(module->name, name_resolve->path))
 					{
@@ -699,7 +763,7 @@ INLINE bool sema_resolve_symbol_common(SemaContext *context, NameResolve *name_r
 			{
 				RETURN_SEMA_ERROR(name_resolve, "'%s' could not be found in %s.", name_resolve->symbol, module_with_path->name->module);
 			}
-			RETURN_SEMA_ERROR(name_resolve->path, "Unknown module '%.*s', did you type it right?", name_resolve->path->len, name_resolve->path->module);
+			RETURN_SEMA_ERROR(name_resolve->path, "No '%.*s' module was imported, did you type it right?", name_resolve->path->len, name_resolve->path->module);
 		}
 	}
 	else
@@ -726,21 +790,15 @@ INLINE bool sema_resolve_symbol_common(SemaContext *context, NameResolve *name_r
 
 Decl *sema_find_extension_method_in_list(Decl **extensions, Type *type, const char *method_name)
 {
+	ASSERT0(type == type->canonical);
 	FOREACH(Decl *, extension, extensions)
 	{
 		if (extension->name != method_name) continue;
-		if (type_infoptr(extension->func_decl.type_parent)->type->canonical == type) return extension;
+		if (typeget(extension->func_decl.type_parent) == type) return extension;
 	}
 	return NULL;
 }
 
-typedef enum
-{
-	METHOD_SEARCH_SUBMODULE_CURRENT,
-	METHOD_SEARCH_IMPORTED,
-	METHOD_SEARCH_CURRENT,
-	METHOD_SEARCH_PRIVATE_IMPORTED
-} MethodSearchType;
 
 
 Decl *sema_resolve_method_in_module(Module *module, Type *actual_type, const char *method_name,
@@ -754,7 +812,7 @@ Decl *sema_resolve_method_in_module(Module *module, Type *actual_type, const cha
 		*private_found = found;
 		found = NULL;
 	}
-	assert(!found || found->visibility != VISIBLE_LOCAL);
+	ASSERT0(!found || found->visibility != VISIBLE_LOCAL);
 	if (found && search_type == METHOD_SEARCH_CURRENT) return found;
 	// We are now searching submodules, so hide the private ones.
 	if (search_type == METHOD_SEARCH_CURRENT) search_type = METHOD_SEARCH_SUBMODULE_CURRENT;
@@ -819,7 +877,7 @@ UNUSED bool sema_check_type_variable_array(SemaContext *context, TypeInfo *type_
 		}
 		break;
 	}
-	assert(type->type_kind == TYPE_STRUCT);
+	ASSERT0(type->type_kind == TYPE_STRUCT);
 	if (type->decl->has_variable_array)
 	{
 		SEMA_ERROR(type_info, "Arrays of structs with flexible array members is not allowed.");
@@ -879,7 +937,7 @@ bool sema_resolve_type_decl(SemaContext *context, Type *type)
 
 Decl *sema_resolve_type_method(CompilationUnit *unit, Type *type, const char *method_name, Decl **ambiguous_ref, Decl **private_ref)
 {
-	assert(type == type->canonical);
+	ASSERT0(type == type->canonical);
 	Decl *private = NULL;
 	Decl *ambiguous = NULL;
 	Decl *found = sema_find_extension_method_in_list(unit->local_method_extensions, type, method_name);
@@ -887,7 +945,7 @@ Decl *sema_resolve_type_method(CompilationUnit *unit, Type *type, const char *me
 	if (ambiguous)
 	{
 		*ambiguous_ref = ambiguous;
-		assert(found);
+		ASSERT0(found);
 		return found;
 	}
 
@@ -916,8 +974,8 @@ Decl *sema_resolve_type_method(CompilationUnit *unit, Type *type, const char *me
 	}
 	if (!found)
 	{
-		found = sema_resolve_method_in_module(global_context.core_module, type, method_name,
-											  &private, &ambiguous, METHOD_SEARCH_IMPORTED);
+		found = sema_resolve_method_in_module(compiler.context.core_module, type, method_name,
+		                                      &private, &ambiguous, METHOD_SEARCH_IMPORTED);
 	}
 	if (found && ambiguous)
 	{
@@ -926,7 +984,7 @@ Decl *sema_resolve_type_method(CompilationUnit *unit, Type *type, const char *me
 	}
 	if (!found)
 	{
-		found = sema_find_extension_method_in_list(global_context.method_extensions, type, method_name);
+		found = sema_find_extension_method_in_list(compiler.context.method_extensions, type, method_name);
 		private = NULL;
 	}
 	if (private) *private_ref = private;
@@ -954,11 +1012,11 @@ bool unit_resolve_parameterized_symbol(SemaContext *context, NameResolve *name_r
 	name_resolve->private_decl = NULL;
 	name_resolve->path_found = NULL;
 
-	if (!sema_find_decl_in_private_imports(context, name_resolve, true)) return false;
+	if (!sema_find_decl_in_imports(context, name_resolve, true)) return false;
 	if (!name_resolve->found)
 	{
-		if (!sema_find_decl_in_global(context, &global_context.generic_symbols,
-		                                global_context.generic_module_list,
+		if (!sema_find_decl_in_global(context, &compiler.context.generic_symbols,
+		                                compiler.context.generic_module_list,
 		                                name_resolve, true)) return false;
 	}
 	// 14. Error report
@@ -968,7 +1026,7 @@ bool unit_resolve_parameterized_symbol(SemaContext *context, NameResolve *name_r
 		sema_report_error_on_decl(context, name_resolve);
 		return false;
 	}
-	if (!decl_is_user_defined_type(name_resolve->found) && !name_resolve->path)
+	if (!decl_is_user_defined_type(name_resolve->found) && !name_resolve->path && !name_resolve->found->is_autoimport)
 	{
 		if (name_resolve->suppress_error) return false;
 		RETURN_SEMA_ERROR(name_resolve, "Function and variables must be prefixed with a path, e.g. 'foo::%s'.", name_resolve->symbol);
@@ -1028,7 +1086,7 @@ BoolErr sema_symbol_is_defined_in_scope(SemaContext *c, const char *symbol)
 	Decl *found = resolve.found;
 	if (!found) return BOOL_FALSE;
 	// Defined in the same module => defined
-	if (decl_module(found) == c->unit->module) return BOOL_TRUE;
+	if (found->unit->module == c->unit->module) return BOOL_TRUE;
 	// Not a variable or function => defined
 	if (found->decl_kind != DECL_VAR && found->decl_kind != DECL_FUNC) return BOOL_TRUE;
 	// Otherwise defined only if autoimport.
@@ -1059,7 +1117,7 @@ Decl *sema_resolve_symbol(SemaContext *context, const char *symbol, Path *path, 
 	};
 	if (!sema_resolve_symbol_common(context, &resolve)) return NULL;
 	Decl *found = resolve.found;
-	assert(found);
+	ASSERT0(found);
 	if (!decl_ok(found)) return NULL;
 	return resolve.found;
 }
@@ -1067,7 +1125,7 @@ Decl *sema_resolve_symbol(SemaContext *context, const char *symbol, Path *path, 
 
 static inline void sema_append_local(SemaContext *context, Decl *decl)
 {
-	assert(!decl_is_ct_var(decl));
+	ASSERT0(!decl_is_ct_var(decl));
 	Decl ***locals = &context->locals;
 	size_t locals_size = vec_size(*locals);
 	size_t current_local = context->active_scope.current_local;
@@ -1088,7 +1146,7 @@ static inline void sema_append_local(SemaContext *context, Decl *decl)
 
 INLINE bool sema_add_ct_local(SemaContext *context, Decl *decl)
 {
-	assert(decl_is_ct_var(decl));
+	ASSERT0(decl_is_ct_var(decl));
 
 	Decl *other = sema_find_ct_local(context, decl->name);
 	if (other)
@@ -1114,8 +1172,7 @@ bool sema_add_local(SemaContext *context, Decl *decl)
 	if (is_var && decl->var.shadow) goto ADD_VAR;
 
 	Decl *other = sema_find_local(context, decl->name);
-	assert(!other || decl_module(other));
-	if (other && (decl_module(other) == current_unit->module || other->is_autoimport))
+	if (other && (other->unit->module == current_unit->module || other->is_autoimport))
 	{
 		sema_shadow_error(context, decl, other);
 		decl_poison(decl);
@@ -1141,7 +1198,7 @@ void sema_unwrap_var(SemaContext *context, Decl *decl)
 
 void sema_rewrap_var(SemaContext *context, Decl *decl)
 {
-	assert(decl->decl_kind == DECL_VAR && decl->var.kind == VARDECL_UNWRAPPED && decl->var.alias->type->type_kind == TYPE_OPTIONAL);
+	ASSERT0(decl->decl_kind == DECL_VAR && decl->var.kind == VARDECL_UNWRAPPED && decl->var.alias->type->type_kind == TYPE_OPTIONAL);
 	sema_append_local(context, decl->var.alias);
 }
 
@@ -1156,7 +1213,7 @@ void sema_erase_var(SemaContext *context, Decl *decl)
 
 void sema_erase_unwrapped(SemaContext *context, Decl *decl)
 {
-	assert(IS_OPTIONAL(decl));
+	ASSERT0(IS_OPTIONAL(decl));
 	Decl *rewrapped = decl_copy(decl);
 	rewrapped->var.kind = VARDECL_REWRAPPED;
 	rewrapped->var.alias = decl;

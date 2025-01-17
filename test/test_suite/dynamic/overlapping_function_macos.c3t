@@ -40,7 +40,7 @@ fn void main()
 @.panic_msg = internal constant [42 x i8] c"No method 'tesT' could be found on target\00", align 1
 @.file = internal constant [30 x i8] c"overlapping_function_macos.c3\00", align 1
 @.func = internal constant [5 x i8] c"main\00", align 1
-@std.core.builtin.panic = external global ptr, align 8
+@std.core.builtin.panic = extern_weak global ptr, align 8
 @"$sel.foo" = linkonce_odr constant [4 x i8] c"foo\00", align 1
 @"$c3_dynamic" = internal global [2 x { ptr, ptr, i64 }] [{ ptr, ptr, i64 } { ptr @overlap.Test.tesT, ptr @"$sel.tesT", i64 ptrtoint (ptr @"$ct.overlap.Test" to i64) }, { ptr, ptr, i64 } { ptr @overlap.Test.foo, ptr @"$sel.foo", i64 ptrtoint (ptr @"$ct.overlap.Test" to i64) }], section "__DATA,__c3_dynamic", align 8
 
@@ -50,13 +50,11 @@ entry:
   ret void
 }
 
-; Function Attrs:
 define void @overlap.Test.foo(ptr %0) #0 {
 entry:
   ret void
 }
 
-; Function Attrs:
 define void @overlap.main() #0 {
 entry:
   %z = alloca %any, align 8
@@ -147,7 +145,7 @@ entry:
   ret i32 0
 }
 
-define weak_odr ptr @.dyn_search(ptr %0, ptr %1) unnamed_addr {
+define weak ptr @.dyn_search(ptr %0, ptr %1) unnamed_addr {
 entry:
   br label %check
 
@@ -160,7 +158,7 @@ missing_function:                                 ; preds = %check
   ret ptr null
 
 compare:                                          ; preds = %check
-  %4 = getelementptr inbounds { ptr, ptr, ptr }, ptr %2, i32 0, i32 1
+  %4 = getelementptr inbounds
   %5 = load ptr, ptr %4, align 8
   %6 = icmp eq ptr %5, %1
   br i1 %6, label %match, label %no_match
@@ -170,7 +168,7 @@ match:                                            ; preds = %compare
   ret ptr %7
 
 no_match:                                         ; preds = %compare
-  %8 = getelementptr inbounds { ptr, ptr, ptr }, ptr %2, i32 0, i32 2
+  %8 = getelementptr inbounds
   %9 = load ptr, ptr %8, align 8
   br label %check
 }

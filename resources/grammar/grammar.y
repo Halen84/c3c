@@ -1,19 +1,21 @@
 %{
 
 #include <stdio.h>
+#include "grammar.tab.h"
+#include "lex.yy.h"
 #define YYERROR_VERBOSE
-int yydebug = 1;
-extern char yytext[];
-extern int column, yylineno;
-int yylex(void);
-void yyerror(const char *s);
+void yyerror(YYLTYPE * yylloc_param , yyscan_t yyscanner, const char *yymsgp);
 %}
 %locations
+%pure-parser
+%lex-param {void  *scanner}
+%parse-param {void *scanner}
 
 %token IDENT HASH_IDENT CT_IDENT CONST_IDENT
 %token TYPE_IDENT CT_TYPE_IDENT
 %token AT_TYPE_IDENT AT_IDENT CT_INCLUDE
 %token STRING_LITERAL INTEGER
+%token CT_AND_OP CT_OR_OP CT_CONCAT_OP CT_EXEC
 %token INC_OP DEC_OP SHL_OP SHR_OP LE_OP GE_OP EQ_OP NE_OP
 %token AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
 %token LGENPAR RGENPAR
@@ -84,13 +86,12 @@ ct_castable
 
 ct_analyse
 	: CT_EVAL
-	| CT_DEFINED
 	| CT_SIZEOF
 	| CT_STRINGIFY
 	| CT_IS_CONST
 	;
 
-ct_arg
+ct_vaarg
 	: CT_VACONST
 	| CT_VAARG
 	| CT_VAREF
@@ -146,11 +147,11 @@ base_expr_assignable
 	| '(' expr ')'
 	| expr_block
 	| ct_call '(' flat_path ')'
-	| ct_arg '(' expr ')'
+	| ct_vaarg '[' expr ']'
 	| ct_analyse '(' expression_list ')'
+	| CT_DEFINED '(' arg_list ')'
 	| CT_VACOUNT
 	| CT_FEATURE '(' CONST_IDENT ')'
-	| CT_AND '(' expression_list ')'
 	| ct_castable '(' expr ',' type ')'
 	| lambda_decl compound_statement
 	;
@@ -289,6 +290,7 @@ bit_stmt_expr
 additive_op
 	: '+'
 	| '-'
+	| CT_CONCAT_OP
 	;
 
 additive_expr
@@ -333,21 +335,25 @@ try_chain_expr
 and_expr
 	: relational_expr
 	| and_expr AND_OP relational_expr
+	| and_expr CT_AND_OP relational_expr
 	;
 
 and_stmt_expr
 	: relational_stmt_expr
 	| and_stmt_expr AND_OP relational_expr
+	| and_stmt_expr CT_AND_OP relational_expr
 	;
 
 or_expr
 	: and_expr
 	| or_expr OR_OP and_expr
+	| or_expr CT_OR_OP and_expr
 	;
 
 or_stmt_expr
 	: and_stmt_expr
 	| or_stmt_expr OR_OP and_expr
+	| or_stmt_expr CT_OR_OP and_expr
 	;
 
 suffix_expr
@@ -439,14 +445,22 @@ param_path
 	| param_path param_path_element
 	;
 
+arg_name
+	: IDENT
+	| CT_TYPE_IDENT
+	| HASH_IDENT
+	| CT_IDENT
+	;
 arg
 	: param_path '=' expr
-	| param_path
-	| type
 	| param_path '=' type
+	| param_path
+	| arg_name ':' expr
+	| arg_name ':' type
+	| type
 	| expr
-	| CT_VASPLAT '(' range_expr ')'
-	| CT_VASPLAT '(' ')'
+	| CT_VASPLAT
+	| CT_VASPLAT '[' range_expr ']'
 	| ELLIPSIS expr
 	;
 
@@ -532,7 +546,7 @@ base_type
 	| CT_TYPE_IDENT
 	| CT_TYPEOF '(' expr ')'
 	| CT_TYPEFROM '(' constant_expr ')'
-	| CT_VATYPE '(' constant_expr ')'
+	| CT_VATYPE '[' constant_expr ']'
 	| CT_EVALTYPE '(' constant_expr ')'
 	;
 
@@ -1211,7 +1225,7 @@ module
 
 import_paths
 	: path_ident
-	| path_ident ',' path_ident
+	| import_paths ',' path_ident
 	;
 
 import_decl
@@ -1233,9 +1247,16 @@ opt_extern
 	| empty
 	;
 
+exec_decl
+	: CT_EXEC '(' expr ')' opt_attributes ';'
+	| CT_EXEC '(' expr ',' initializer_list ')' opt_attributes ';'
+	| CT_EXEC '(' expr ',' initializer_list ',' expr ')' opt_attributes ';'
+	;
+
 top_level
 	: module
 	| import_decl
+	| exec_decl
 	| opt_extern func_definition
 	| opt_extern const_declaration
 	| opt_extern global_declaration
@@ -1254,15 +1275,25 @@ top_level
 
 %%
 
-void yyerror(const char *s)
+void yyerror(YYLTYPE * yylloc_param , yyscan_t yyscanner, const char *yymsgp)
 {
 	fflush(stdout);
-	printf(":%d:%d:\n%*s\n%*s\n", yylineno, column, column, "^", column, s);
+	printf(":%d:%d:\n%*s\n%*s\n", yylloc_param->first_line,
+		yylloc_param->first_column,
+		yylloc_param->first_column, "^", yylloc_param->first_column, yymsgp);
 }
 
 int main(int argc, char *argv[])
 {
-	int rc = yyparse();
+	int rc;
+	yyscan_t scanner;
+	rc = yylex_init (&scanner);
+	if(rc) {
+		printf(" Failed to initialize the scanner: %d\n", rc);
+		return rc;
+	}
+	rc = yyparse (scanner);
+	yylex_destroy (scanner);
 	printf(" -> yyparse return %d\n", rc);
 	return rc;
 }

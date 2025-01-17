@@ -9,6 +9,7 @@
 
 #if PLATFORM_WINDOWS
 #include "direct.h"
+#include "intrin.h"
 #endif
 
 #if FETCH_AVAILABLE
@@ -37,8 +38,7 @@ typedef struct
 } MacSDK;
 
 typedef struct {
-	char* windows_sdk_um_library_path;
-	char* windows_sdk_ucrt_library_path;
+	char* windows_sdk_path;
 	char* vs_library_path;
 } WindowsSDK;
 
@@ -48,7 +48,7 @@ NORETURN void exit_compiler(int exit_value);
 extern jmp_buf on_err_jump;
 
 extern bool debug_log;
-extern bool debug_stats;
+
 extern uintptr_t arena_zero;
 struct ScratchBuf { char str[MAX_STRING_BUFFER]; uint32_t len; };
 extern struct ScratchBuf scratch_buffer;
@@ -73,6 +73,7 @@ const char* file_expand_path(const char* path);
 const char* find_lib_dir(void);
 const char *find_rel_exe_dir(const char *dir);
 
+void file_copy_file(const char *src_path, const char *dst_path, bool overwrite);
 void file_delete_all_files_in_dir_with_suffix(const char *dir, const char *suffix);
 bool file_delete_file(const char *path);
 bool file_is_dir(const char *file);
@@ -86,9 +87,13 @@ void file_find_top_dir();
 bool file_has_suffix_in_list(const char *file_name, int name_len, const char **suffix_list, int suffix_count);
 void file_add_wildcard_files(const char ***files, const char *path, bool recursive, const char **suffix_list, int suffix_count);
 const char *file_append_path(const char *path, const char *name);
+const char *file_append_path_temp(const char *path, const char *name);
 
-const char *execute_cmd(const char *cmd, bool ignore_failure);
-bool execute_cmd_failable(const char *cmd, const char **result);
+const char **target_expand_source_names(const char *base_dir, const char** dirs, const char **suffix_list, const char ***object_list_ref, int suffix_count, bool error_on_mismatch);
+
+const char *execute_cmd(const char *cmd, bool ignore_failure, const char *stdin_string);
+
+bool execute_cmd_failable(const char *cmd, const char **result, const char *stdin_string);
 void *cmalloc(size_t size);
 void *ccalloc(size_t size, size_t elements);
 void memory_init(size_t max_mem);
@@ -153,12 +158,15 @@ void slice_trim(StringSlice *slice);
 
 void scratch_buffer_clear(void);
 void scratch_buffer_append(const char *string);
-UNUSED char *scratch_buffer_get_quoted(const char *string);
-UNUSED void scratch_buffer_append_quoted(const char *string);
 void scratch_buffer_append_len(const char *string, size_t len);
 void scratch_buffer_append_char(char c);
+void scratch_buffer_append_in_quote(const char *string);
+void scratch_buffer_append_char_repeat(char c, size_t count);
+void scratch_buffer_append_remove_space(const char *start, int len);
 void scratch_buffer_append_signed_int(int64_t i);
 void scratch_buffer_append_double(double d);
+void scratch_buffer_append_shell_escaped(const char *string);
+void scratch_buffer_append_cmd_argument(const char *string);
 UNUSED void scratch_buffer_append_unsigned_int(uint64_t i);
 void scratch_buffer_printf(const char *format, ...);
 char *scratch_buffer_to_string(void);
@@ -194,7 +202,7 @@ static inline uint32_t fnv1a(const char *key, uint32_t len);
 INLINE uint32_t vec_size(const void *vec);
 static inline void vec_resize(void *vec, uint32_t new_size);
 static inline void vec_pop(void *vec);
-static inline void vec_erase_ptr_at(void *vec, unsigned i);
+static inline void vec_erase_at(void *vec, unsigned i);
 
 #define NUMBER_CHAR_CASE '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9'
 #define UPPER_CHAR_CASE 'A': case 'B': case 'C': case 'D': case 'E': case 'F': case 'G': case 'H': case 'I': case 'J': \
@@ -247,8 +255,8 @@ typedef struct
 
 static inline VHeader_* vec_new_(size_t element_size, size_t capacity)
 {
-	assert(capacity < UINT32_MAX);
-	assert(element_size < UINT32_MAX / 100);
+	ASSERT0(capacity < UINT32_MAX);
+	ASSERT0(element_size < UINT32_MAX / 100);
 	VHeader_ *header = CALLOC(element_size * capacity + sizeof(VHeader_));
 	header->capacity = (uint32_t)capacity;
 	return header;
@@ -262,19 +270,35 @@ static inline void vec_resize(void *vec, uint32_t new_size)
 	header[-1].size = new_size;
 }
 
+
 static inline void vec_pop(void *vec)
 {
-	assert(vec);
-	assert(vec_size(vec) > 0);
+	ASSERT0(vec);
+	ASSERT0(vec_size(vec) > 0);
 	VHeader_ *header = vec;
 	header[-1].size--;
 }
 
-static inline void vec_erase_ptr_at(void *vec, unsigned i)
+static inline void vec_erase_front(void  *vec, unsigned to_erase)
 {
-	assert(vec);
+	if (!to_erase) return;
+	ASSERT0(vec);
 	unsigned size = vec_size(vec);
-	assert(size > i);
+	ASSERT0(size >= to_erase);
+	void **vecptr = (void**)vec;
+	for (int i = to_erase; i < size; i++)
+	{
+		vecptr[i - to_erase] = vecptr[i];
+	}
+	VHeader_ *header = vec;
+	header[-1].size -= to_erase;
+}
+
+static inline void vec_erase_at(void *vec, unsigned i)
+{
+	ASSERT0(vec);
+	unsigned size = vec_size(vec);
+	ASSERT0(size > i);
 	void **vecptr = (void**)vec;
 	for (int j = i + 1; j < size; j++)
 	{
@@ -319,7 +343,7 @@ static inline void* expand_(void *vec, size_t element_size)
 #define CONCAT(a, b) CONCAT_INNER(a, b)
 
 #define FOREACH(type__, name__, vec__) \
-type__* CONCAT(foreach_vec_, __LINE__) = (vec__); type__* CONCAT(foreach_vecend_, __LINE__) = CONCAT(foreach_vec_, __LINE__) + vec_size(CONCAT(foreach_vec_, __LINE__)); \
+type__* CONCAT(foreach_vec_, __LINE__) = (vec__); type__* CONCAT(foreach_vecend_, __LINE__) = CONCAT(foreach_vec_, __LINE__) ? CONCAT(foreach_vec_, __LINE__) + vec_size(CONCAT(foreach_vec_, __LINE__)) : NULL; \
 type__* CONCAT(foreach_it_, __LINE__) = CONCAT(foreach_vec_, __LINE__); \
 for (type__ name__ ; CONCAT(foreach_it_, __LINE__) < CONCAT(foreach_vecend_, __LINE__) ? (name__ = *CONCAT(foreach_it_, __LINE__), true) : false; CONCAT(foreach_it_, __LINE__)++)
 
@@ -407,6 +431,22 @@ INLINE uint32_t vec_size(const void *vec)
 static inline bool is_power_of_two(uint64_t x)
 {
 	return x != 0 && (x & (x - 1)) == 0;
+}
+
+static int clz(uint64_t num)
+{
+#if IS_CLANG || IS_GCC
+	return (int)__builtin_ctzll(num);
+#else
+	unsigned long index;
+	_BitScanReverse64(&index, (__int64)num);
+	return (int)index;
+#endif
+}
+
+static inline unsigned char power_of_2(uint64_t pot_value)
+{
+	return 64 - clz(pot_value);
 }
 
 static inline uint32_t next_highest_power_of_2(uint32_t v)

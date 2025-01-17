@@ -20,25 +20,54 @@ static inline bool create_module_or_check_name(CompilationUnit *unit, Path *modu
 	if (!module)
 	{
 		module = unit->module = compiler_find_or_create_module(module_name, parameters);
-	}
-	else
-	{
-		if (unit->module->name->module != module_name->module)
+		if (module->is_generic != (parameters != NULL))
 		{
-			RETURN_PRINT_ERROR_AT(false,
-			                      module_name,
-			                      "Module name here '%s' did not match actual module '%s'.",
-			                      module_name->module,
-			                      module->name->module);
+			print_error_at(module_name->span, "'%s' is both used as regular and generic module, it can't be both.",
+			               module_name->module);
+			SEMA_NOTE(module->name, "The definition here is different.");
+			return false;
 		}
+		if (!module->is_generic) goto DONE;
+		if (vec_size(parameters) != vec_size(module->parameters))
+		{
+			PRINT_ERROR_AT(module_name, "The parameter declarations of the generic module '%s' don't match.");
+			SEMA_NOTE(module->name, "A different definition can be found here.");
+			return false;
+		}
+		FOREACH_IDX(idx, const char *, name, parameters)
+		{
+			bool is_type = str_is_type(name);
+			if (is_type != str_is_type(module->parameters[idx]))
+			{
+				PRINT_ERROR_AT(module_name, "The parameter declarations of the generic module '%s' don't match.");
+				SEMA_NOTE(module->name, "The other definition is here.");
+				return false;
+			}
+		}
+		goto DONE;
+	}
+	if (unit->module->name->module != module_name->module)
+	{
+		RETURN_PRINT_ERROR_AT(false,
+		                      module_name,
+		                      "Module name here '%s' did not match actual module '%s'.",
+		                      module_name->module,
+		                      module->name->module);
 	}
 
+DONE:;
 	vec_add(module->units, unit);
 	return true;
 }
 
 static bool filename_to_module_in_buffer(const char *path)
 {
+	if (str_eq("<stdin>", path))
+	{
+		scratch_buffer_clear();
+		scratch_buffer_append("stdin_file");
+		return true;
+	}
 	int len = (int)strlen(path);
 	int last_slash = 0;
 	int last_dot = -1;
@@ -105,12 +134,17 @@ bool context_set_module(ParseContext *context, Path *path, const char **generic_
 	return create_module_or_check_name(context->unit, path, generic_parameters);
 }
 
+bool context_is_macro(SemaContext *context)
+{
+	if (context->current_macro != NULL) return true;
+	return context->call_env.current_function && context->call_env.current_function->func_decl.in_macro;
+}
 
 void unit_register_external_symbol(SemaContext *context, Decl *decl)
 {
 	if (decl->is_external_visible) return;
 	Module *active_module = context->current_macro ? context->original_module : context->compilation_unit->module;
-	if (decl_module(decl) == active_module) return;
+	if (decl->unit->module == active_module) return;
 	decl->is_external_visible = true;
 }
 
@@ -126,7 +160,6 @@ void decl_register(Decl *decl)
 		case DECL_CT_ASSERT:
 		case DECL_CT_ECHO:
 		case DECL_CT_EXEC:
-		case DECL_CT_EXPAND:
 		case DECL_ENUM_CONSTANT:
 		case DECL_FAULTVALUE:
 		case DECL_IMPORT:
@@ -157,7 +190,7 @@ void decl_register(Decl *decl)
 
 void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 {
-	assert(!decl->unit || decl->unit->module->is_generic);
+	ASSERT0(!decl->unit || decl->unit->module->is_generic);
 	decl->unit = unit;
 
 	switch (decl->decl_kind)
@@ -167,10 +200,15 @@ void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 		case DECL_POISONED:
 			break;
 		case DECL_MACRO:
-			assert(decl->name);
+			ASSERT0(decl->name);
 			if (decl->func_decl.type_parent)
 			{
-				vec_add(unit->macro_methods, decl);
+				if (type_infoptr(decl->func_decl.type_parent)->kind == TYPE_INFO_GENERIC)
+				{
+					vec_add(unit->generic_methods_to_register, decl);
+					return;
+				}
+				vec_add(unit->methods_to_register, decl);
 				return;
 			}
 			else
@@ -180,10 +218,15 @@ void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 			decl_register(decl);
 			break;
 		case DECL_FUNC:
-			assert(decl->name);
+			ASSERT0(decl->name);
 			if (decl->func_decl.type_parent)
 			{
-				vec_add(unit->methods, decl);
+				if (type_infoptr(decl->func_decl.type_parent)->kind == TYPE_INFO_GENERIC)
+				{
+					vec_add(unit->generic_methods_to_register, decl);
+					return;
+				}
+				vec_add(unit->methods_to_register, decl);
 				return;
 			}
 			else
@@ -193,7 +236,7 @@ void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 			decl_register(decl);
 			break;
 		case DECL_VAR:
-			assert(decl->name);
+			ASSERT0(decl->name);
 			vec_add(unit->vars, decl);
 			decl_register(decl);
 			break;
@@ -204,17 +247,17 @@ void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 		case DECL_TYPEDEF:
 		case DECL_FAULT:
 		case DECL_BITSTRUCT:
-			assert(decl->name);
+			ASSERT0(decl->name);
 			vec_add(unit->types, decl);
 			decl_register(decl);
 			break;
 		case DECL_DEFINE:
-			assert(decl->name);
+			ASSERT0(decl->name);
 			vec_add(unit->generic_defines, decl);
 			decl_register(decl);
 			break;
 		case DECL_ENUM:
-			assert(decl->name);
+			ASSERT0(decl->name);
 			vec_add(unit->enums, decl);
 			decl_register(decl);
 			break;
@@ -222,7 +265,6 @@ void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 			vec_add(unit->attributes, decl);
 			decl_register(decl);
 			break;
-
 		case DECL_FAULTVALUE:
 		case DECL_ENUM_CONSTANT:
 		case DECL_IMPORT:
@@ -234,7 +276,6 @@ void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 			UNREACHABLE
 		case DECL_CT_EXEC:
 		case DECL_CT_INCLUDE:
-		case DECL_CT_EXPAND:
 			vec_add(unit->ct_includes, decl);
 			return;
 		case DECL_CT_ECHO:
@@ -254,14 +295,14 @@ void unit_register_global_decl(CompilationUnit *unit, Decl *decl)
 	}
 	return;
 ERR:
-	assert(decl != old);
+	ASSERT0(decl != old);
 	sema_shadow_error(NULL, decl, old);
 	decl_poison(decl);
 	decl_poison(old);
 }
 
 
-bool unit_add_import(CompilationUnit *unit, Path *path, bool private_import)
+bool unit_add_import(CompilationUnit *unit, Path *path, bool private_import, bool is_non_recursive)
 {
 	DEBUG_LOG("SEMA: Add import of '%s'.", path->module);
 
@@ -272,7 +313,7 @@ bool unit_add_import(CompilationUnit *unit, Path *path, bool private_import)
 	import->decl_kind = DECL_IMPORT;
 	import->import.path = path;
 	import->import.import_private_as_public = private_import;
-
+	import->import.is_non_recurse = is_non_recursive;
 	vec_add(unit->imports, import);
 	DEBUG_LOG("Added import %s", path->module);
 	return true;

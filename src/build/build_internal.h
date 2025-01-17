@@ -12,6 +12,11 @@ typedef struct
 	BuildTarget **targets;
 } Project;
 
+#define COPY_IF_DEFAULT(target__, value__) \
+  do { if ((int)target__ == -1) target__ = value__; } while(0)
+
+extern bool silence_deprecation;
+
 extern const char *trust_level[3];
 
 static const char *memory_environment[6] = {
@@ -21,10 +26,12 @@ static const char *memory_environment[6] = {
 	[MEMORY_ENV_NONE] = "none",
 };
 
-static const char *wincrt_linking[3] = {
+static const char *wincrt_linking[5] = {
 	[WIN_CRT_NONE] = "none",
 	[WIN_CRT_DYNAMIC] = "dynamic",
+	[WIN_CRT_DYNAMIC_DEBUG] = "dynamic-debug",
 	[WIN_CRT_STATIC] = "static",
+	[WIN_CRT_STATIC_DEBUG] = "static-debug",
 };
 
 static const char *vector_conv[2] = {
@@ -81,6 +88,18 @@ static const char *optlevels[4] = {
 	[OPTIMIZATION_AGGRESSIVE] = "max",
 };
 
+static const char *backends[3] = {
+		[BACKEND_LLVM] = "llvm",
+		[BACKEND_TB] = "tb",
+		[BACKEND_C] = "c",
+};
+
+static const char *validation_levels[3] = {
+	[VALIDATION_LENIENT] = "lenient",
+	[VALIDATION_STRICT] = "strict",
+	[VALIDATION_OBNOXIOUS] = "obnoxious",
+};
+
 static const char *backtrace_levels[2] = {
 	[SHOW_BACKTRACE_OFF] = "off",
 	[SHOW_BACKTRACE_ON] = "on",
@@ -94,12 +113,18 @@ static const char *reloc_models[5] = {
 	[RELOC_BIG_PIE] = "PIE",
 };
 
-Project *project_load(void);
-BuildTarget *project_select_target(Project *project, const char *optional_target);
-void update_feature_flags(const char ***flags, const char ***removed_flag, const char *arg, bool add);
+static const char *sanitize_modes[4] = {
+	[SANITIZE_NONE] = "none",
+	[SANITIZE_ADDRESS] = "address",
+	[SANITIZE_MEMORY] = "memory",
+	[SANITIZE_THREAD] = "thread",
+};
+
+Project *project_load(const char **filename_ref);
+BuildTarget *project_select_target(const char *filename, Project *project, const char *optional_target);
 
 const char *get_string(const char *file, const char *category, JSONObject *table, const char *key,
-                       const char *default_value);
+	const char *default_value);
 int get_valid_bool(const char *file, const char *target, JSONObject *json, const char *key, int default_val);
 const char *get_optional_string(const char *file, const char *category, JSONObject *table, const char *key);
 const char *get_mandatory_string(const char *file, const char *category, JSONObject *object, const char *key);
@@ -107,6 +132,8 @@ const char **get_string_array(const char *file, const char *category, JSONObject
 const char **get_optional_string_array(const char *file, const char *target, JSONObject *table, const char *key);
 const char *get_cflags(const char *file, const char *target, JSONObject *json, const char *original_flags);
 void get_list_append_strings(const char *file, const char *target, JSONObject *json, const char ***list_ptr,
-                             const char *base, const char *override, const char *add);
-int get_valid_string_setting(const char *file, const char *target, JSONObject *json, const char *key, const char** values, int first_result, int count, const char *expected);
-void check_json_keys(const char* valid_keys[][2], size_t key_count, const char* deprecated_keys[], size_t deprecated_key_count, JSONObject *json, const char *target_name, const char *option);
+	const char *base, const char *override, const char *add);
+int get_valid_string_setting(const char *file, const char *target, JSONObject *json, const char *key, const char **values, int first_result, int count, const char *expected);
+int get_valid_enum_from_string(const char *str, const char *target, const char **values, int count, const char *expected);
+void check_json_keys(const char *valid_keys[][2], size_t key_count, const char *deprecated_keys[], size_t deprecated_key_count, JSONObject *json, const char *target_name, const char *option);
+long get_valid_integer(JSONObject *table, const char *key, const char *category, bool mandatory);

@@ -3,14 +3,14 @@ import std::sort::is;
 import std::sort::cs;
 import std::sort::qs;
 
-/**
- * Sort list using the counting sort algorithm.
- * @require @is_sortable(list) "The list must be indexable and support .len or .len()"
- * @require @is_cmp_key_fn(key_fn, list) "Expected a transformation function which returns an unsigned integer."
- **/
+<*
+Sort list using the counting sort algorithm.
+ @require @is_sortable(list) "The list must be indexable and support .len or .len()"
+ @require @is_cmp_key_fn(key_fn, list) "Expected a transformation function which returns an unsigned integer."
+*>
 macro countingsort(list, key_fn = EMPTY_MACRO_SLOT) @builtin
 {
-	usz len = sort::@len_from_list(list);
+	usz len = sort::len_from_list(list);
 	cs::csort(<$typeof(list), $typeof(key_fn)>)(list, 0, len, key_fn, ~((uint)0));
 }
 
@@ -32,7 +32,7 @@ def Indexs = char[256] @private;
 def ElementType = $typeof(Type{}[0]);
 
 const bool NO_KEY_FN @private = types::is_same(KeyFn, EmptySlot);
-const bool KEY_BY_VALUE @private = $or(NO_KEY_FN, $assignable(Type{}[0], $typefrom(KeyFn.params[0])));
+const bool KEY_BY_VALUE @private = NO_KEY_FN ||| $assignable(Type{}[0], $typefrom(KeyFn.paramsof[0].type));
 const bool LIST_HAS_REF @private = $defined(&Type{}[0]);
 
 def KeyFnReturnType = $typefrom(KeyFn.returns) @if(!NO_KEY_FN);

@@ -19,6 +19,7 @@
 
 # Libraries
 *.lib
+*.tlb
 *.a
 *.la
 *.lo
@@ -67,3 +68,16 @@ out/
 
 /cmake-build-debug/
 /cmake-build-release/
+
+# Emacs files
+TAGS
+
+# Clangd LSP files
+/.cache/
+/compile_commands.json
+
+# 'nix build' resulting symlink
+result
+
+# macOS
+.DS_Store

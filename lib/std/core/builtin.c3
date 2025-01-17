@@ -4,63 +4,58 @@
 module std::core::builtin;
 import libc, std::hash, std::io, std::os::backtrace;
 
-/**
- * Use `IteratorResult` when reading the end of an iterator, or accessing a result out of bounds.
- **/
-fault IteratorResult
-{
-	NO_MORE_ELEMENT
-}
+/*
+ Use `IteratorResult` when reading the end of an iterator, or accessing a result out of bounds.
+*/
+fault IteratorResult { NO_MORE_ELEMENT }
 
-/**
- * Use `SearchResult` when trying to return a value from some collection but the element is missing.
- **/
-fault SearchResult
-{
-	MISSING
-}
+/*
+ Use `SearchResult` when trying to return a value from some collection but the element is missing.
+*/
+fault SearchResult { MISSING }
 
-/**
- * Use `CastResult` when an attempt at conversion fails.
- **/
-fault CastResult
-{
-	TYPE_MISMATCH
-}
+/*
+ Use `CastResult` when an attempt at conversion fails.
+*/
+fault CastResult { TYPE_MISMATCH }
 
-/**
- * Stores a variable on the stack, then restores it at the end of the
- * macro scope.
- *
- * @param variable `the variable to store and restore`
- **/
-macro void @scope(&variable; @body) @builtin
+
+def VoidFn = fn void();
+
+<*
+ Stores a variable on the stack, then restores it at the end of the
+ macro scope.
+
+ @param #variable `the variable to store and restore`
+ @require values::@is_lvalue(#variable)
+*>
+macro void @scope(#variable; @body) @builtin
 {
-	var temp = *variable;
-	defer *variable = temp;
+	var temp = #variable;
+	defer #variable = temp;
 	@body();
 }
 
-/**
- * Swap two variables
- * @require $assignable(*b, $typeof(*a)) && $assignable(*a, $typeof(*b))
- **/
-macro void @swap(&a, &b) @builtin
+<*
+ Swap two variables
+ @require $defined(#a = #b, #b = #a) `The values must be mutually assignable`
+*>
+macro void @swap(#a, #b) @builtin
 {
-	var temp = *a;
-	*a = *b;
-	*b = temp;
+	var temp = #a;
+	#a = #b;
+	#b = temp;
 }
 
-/**
- * Convert an `any` type to a type, returning an failure if there is a type mismatch.
- *
- * @param v `the any to convert to the given type.`
- * @param $Type `the type to convert to`
- * @return `The any.ptr converted to its type.`
- * @ensure @typeis(return, $Type*)
- * @return! CastResult.TYPE_MISMATCH
- **/
+<*
+ Convert an `any` type to a type, returning an failure if there is a type mismatch.
+
+ @param v `the any to convert to the given type.`
+ @param $Type `the type to convert to`
+ @return `The any.ptr converted to its type.`
+ @ensure @typeis(return, $Type*)
+ @return! CastResult.TYPE_MISMATCH
+*>
 macro anycast(any v, $Type) @builtin
 {
 	if (v.type != $Type.typeid) return CastResult.TYPE_MISMATCH?;
@@ -78,23 +73,23 @@ fn bool print_backtrace(String message, int backtraces_to_ignore) @if(env::NATIV
 		if (catch backtrace) return false;
 		if (backtrace.len() <= backtraces_to_ignore) return false;
 		io::eprint("\nERROR: '");
-        io::eprint(message);
-        io::eprintn("'");
+		io::eprint(message);
+		io::eprintn("'");
 		foreach (i, &trace : backtrace)
-        {
-            if (i < backtraces_to_ignore) continue;
-            String inline_suffix = trace.is_inline ? " [inline]" : "";
-            if (trace.is_unknown())
-            {
+		{
+			if (i < backtraces_to_ignore) continue;
+			String inline_suffix = trace.is_inline ? " [inline]" : "";
+			if (trace.is_unknown())
+			{
 				io::eprintfn("  in ???%s", inline_suffix);
 				continue;
 			}
 			if (trace.has_file())
-            {
-                io::eprintfn("  in %s (%s:%d) [%s]%s", trace.function, trace.file, trace.line, trace.object_file, inline_suffix);
-                continue;
-            }
-            io::eprintfn("  in %s (source unavailable) [%s]%s", trace.function, trace.object_file, inline_suffix);
+			{
+				io::eprintfn("  in %s (%s:%d) [%s]%s", trace.function, trace.file, trace.line, trace.object_file, inline_suffix);
+				continue;
+			}
+			io::eprintfn("  in %s (source unavailable) [%s]%s", trace.function, trace.object_file, inline_suffix);
 		}
 		return true;
 	};
@@ -105,19 +100,34 @@ fn void default_panic(String message, String file, String function, uint line) @
 	if (!print_backtrace(message, 2))
 	{
 		io::eprintfn("\nERROR: '%s', in %s (%s:%d)", message, function, file, line);
-		return;
 	}
 	$endif
 	$$trap();
 
 }
+
+macro void abort(String string = "Unrecoverable error reached", ...) @builtin @noreturn
+{
+	panicf(string, $$FILE, $$FUNC, $$LINE, $vasplat);
+	$$trap();
+}
+
+bool in_panic @local = false;
+
 fn void default_panic(String message, String file, String function, uint line) @if(!env::NATIVE_STACKTRACE)
 {
+	if (in_panic)
+	{
+		io::eprintn("Panic inside of panic.");
+		return;
+	}
+	in_panic = true;
 	$if $defined(io::stderr):
 	io::eprint("\nERROR: '");
 	io::eprint(message);
 	io::eprintfn("', in %s (%s:%d)", function, file, line);
 	$endif
+	in_panic = false;
 	$$trap();
 }
 
@@ -127,41 +137,49 @@ PanicFn panic = &default_panic;
 
 fn void panicf(String fmt, String file, String function, uint line, args...)
 {
+	if (in_panic)
+	{
+		io::eprint("Panic inside of panic: ");
+		io::eprintn(fmt);
+		return;
+	}
+	in_panic = true;
 	@stack_mem(512; Allocator allocator)
 	{
 		DString s;
-		s.new_init(.allocator = allocator);
+		s.new_init(allocator: allocator);
 		s.appendf(fmt, ...args);
+		in_panic = false;
 		panic(s.str_view(), file, function, line);
 	};
 }
 
-/**
- * Marks the path as unreachable. This will panic in safe mode, and in fast will simply be assumed
- * never happens.
- * @param [in] string "The panic message or format string"
- **/
+<*
+ Marks the path as unreachable. This will panic in safe mode, and in fast will simply be assumed
+ never happens.
+ @param [in] string "The panic message or format string"
+*>
 macro void unreachable(String string = "Unreachable statement reached.", ...) @builtin @noreturn
 {
 	$if env::COMPILER_SAFE_MODE:
-	panicf(string, $$FILE, $$FUNC, $$LINE, $vasplat());
+	panicf(string, $$FILE, $$FUNC, $$LINE, $vasplat);
 	$endif;
 	$$unreachable();
 }
 
-/**
- * Marks the path as unsupported, this is similar to unreachable.
- * @param [in] string "The error message"
- **/
+<*
+ Marks the path as unsupported, this is similar to unreachable.
+ @param [in] string "The error message"
+*>
 macro void unsupported(String string = "Unsupported function invoked") @builtin @noreturn
 {
-	panicf(string, $$FILE, $$FUNC, $$LINE, $vasplat());
+	panicf(string, $$FILE, $$FUNC, $$LINE, $vasplat);
 	$$unreachable();
 }
 
-/**
- * Unconditionally break into an attached debugger when reached.
- **/
+<*
+ Unconditionally break into an attached debugger when reached.
+*>
 macro void breakpoint() @builtin
 {
 	$$breakpoint();
@@ -182,13 +200,13 @@ macro any.as_inner(&self)
 	return $$any_make(self.ptr, self.type.inner);
 }
 
-/**
- * @param expr "the expression to cast"
- * @param $Type "the type to cast to"
- *
- * @require $sizeof(expr) == $Type.sizeof  "Cannot bitcast between types of different size."
- * @ensure @typeis(return, $Type)
- **/
+<*
+ @param expr "the expression to cast"
+ @param $Type "the type to cast to"
+
+ @require $sizeof(expr) == $Type.sizeof  "Cannot bitcast between types of different size."
+ @ensure @typeis(return, $Type)
+*>
 macro bitcast(expr, $Type) @builtin
 {
 	$if $Type.alignof <= $alignof(expr):
@@ -200,82 +218,100 @@ macro bitcast(expr, $Type) @builtin
 	$endif
 }
 
-/**
- * @param $Type `The type of the enum`
- * @param [in] enum_name `The name of the enum to search for`
- * @require $Type.kindof == ENUM `Only enums may be used`
- * @ensure @typeis(return, $Type)
- * @return! SearchResult.MISSING
- **/
+<*
+ @param $Type `The type of the enum`
+ @param [in] enum_name `The name of the enum to search for`
+ @require $Type.kindof == ENUM `Only enums may be used`
+ @ensure @typeis(return, $Type)
+ @return! SearchResult.MISSING
+*>
 macro enum_by_name($Type, String enum_name) @builtin
 {
 	typeid x = $Type.typeid;
 	foreach (i, name : x.names)
 	{
-		if (name == enum_name) return ($Type)i;
+		if (name == enum_name) return $Type.from_ordinal(i);
 	}
 	return SearchResult.MISSING?;
 }
 
-/**
- * Mark an expression as likely to be true
- *
- * @param #value "expression to be marked likely"
- * @param $probability "in the range 0 - 1"
- * @require $probability >= 0 && $probability <= 1.0
- **/
+<*
+ @param $Type `The type of the enum`
+ @require $Type.kindof == ENUM `Only enums may be used`
+ @require $defined($Type.#value) `Expected '#value' to match an enum associated value`
+ @require $assignable(value, $typeof($Type{}.#value)) `Expected the value to match the type of the associated value`
+ @ensure @typeis(return, $Type)
+ @return! SearchResult.MISSING
+*>
+macro @enum_from_value($Type, #value, value) @builtin
+{
+	usz elements = $Type.elements;
+	foreach (e : $Type.values)
+	{
+		if (e.#value == value) return e;
+	}
+	return SearchResult.MISSING?;
+}
+
+<*
+ Mark an expression as likely to be true
+
+ @param #value "expression to be marked likely"
+ @param $probability "in the range 0 - 1"
+ @require $probability >= 0 && $probability <= 1.0
+*>
 macro bool @likely(bool #value, $probability = 1.0) @builtin
 {
-    $switch
-    $case env::BUILTIN_EXPECT_IS_DISABLED:
+	$switch
+	$case env::BUILTIN_EXPECT_IS_DISABLED:
 	return #value;
-    $case $probability == 1.0:
+	$case $probability == 1.0:
 	return $$expect(#value, true);
-    $default:
+	$default:
 	return $$expect_with_probability(#value, true, $probability);
-    $endswitch
+	$endswitch
 }
 
-/**
- * Mark an expression as unlikely to be true
- *
- * @param #value "expression to be marked unlikely"
- * @param $probability "in the range 0 - 1"
- * @require $probability >= 0 && $probability <= 1.0
- **/
+<*
+ Mark an expression as unlikely to be true
+
+ @param #value "expression to be marked unlikely"
+ @param $probability "in the range 0 - 1"
+ @require $probability >= 0 && $probability <= 1.0
+*>
 macro bool @unlikely(bool #value, $probability = 1.0) @builtin
 {
-    $switch
-    $case env::BUILTIN_EXPECT_IS_DISABLED:
+	$switch
+	$case env::BUILTIN_EXPECT_IS_DISABLED:
 	return #value;
-    $case $probability == 1.0:
+	$case $probability == 1.0:
 	return $$expect(#value, false);
-    $default:
+	$default:
 	return $$expect_with_probability(#value, false, $probability);
-    $endswitch
+	$endswitch
 }
 
-/**
- * @require values::@is_int(#value) || values::@is_bool(#value)
- * @require $assignable(expected, $typeof(#value))
- * @require $probability >= 0 && $probability <= 1.0
- **/
+<*
+ @require values::@is_int(#value) || values::@is_bool(#value)
+ @require $assignable(expected, $typeof(#value))
+ @require $probability >= 0 && $probability <= 1.0
+*>
 macro @expect(#value, expected, $probability = 1.0) @builtin
 {
-    $switch
-    $case env::BUILTIN_EXPECT_IS_DISABLED:
+	$switch
+	$case env::BUILTIN_EXPECT_IS_DISABLED:
 	return #value == expected;
-    $case $probability == 1.0:
+	$case $probability == 1.0:
 	return $$expect(#value, ($typeof(#value))expected);
-    $default:
+	$default:
 	return $$expect_with_probability(#value, expected, $probability);
-    $endswitch
+	$endswitch
 }
 
-/**
- * Locality for prefetch, levels 0 - 3, corresponding
- * to "extremely local" to "no locality"
- **/
+<*
+ Locality for prefetch, levels 0 - 3, corresponding
+ to "extremely local" to "no locality"
+*>
 enum PrefetchLocality
 {
 	NO_LOCALITY,
@@ -284,13 +320,13 @@ enum PrefetchLocality
 	VERY_NEAR,
 }
 
-/**
- * Prefetch a pointer.
+<*
+ Prefetch a pointer.
 
- * @param [in] ptr `Pointer to prefetch`
- * @param $locality `Locality ranging from none to extremely local`
- * @param $write `Prefetch for write, otherwise prefetch for read.`
- **/
+ @param [in] ptr `Pointer to prefetch`
+ @param $locality `Locality ranging from none to extremely local`
+ @param $write `Prefetch for write, otherwise prefetch for read.`
+*>
 macro @prefetch(void* ptr, PrefetchLocality $locality = VERY_NEAR, bool $write = false) @builtin
 {
 	$if !env::BUILTIN_PREFETCH_IS_DISABLED:
@@ -300,29 +336,43 @@ macro @prefetch(void* ptr, PrefetchLocality $locality = VERY_NEAR, bool $write =
 
 macro swizzle(v, ...) @builtin
 {
-	return $$swizzle(v, $vasplat());
+	return $$swizzle(v, $vasplat);
 }
 
 macro swizzle2(v, v2, ...) @builtin
 {
-	return $$swizzle2(v, v2, $vasplat());
+	return $$swizzle2(v, v2, $vasplat);
 }
+<*
+ Return the excuse in the Optional if it is Empty, otherwise
+ return a null fault.
 
+ @require @typekind(#expr) == OPTIONAL : `@catch expects an Optional value`
+*>
 macro anyfault @catch(#expr) @builtin
 {
 	if (catch f = #expr) return f;
 	return anyfault {};
 }
 
+<*
+ Check if an Optional expression holds a value or is empty, returning true
+ if it has a value.
+
+ @require @typekind(#expr) == OPTIONAL : `@ok expects an Optional value`
+*>
 macro bool @ok(#expr) @builtin
 {
 	if (catch #expr) return false;
 	return true;
 }
 
-macro char[] @as_char_view(&value) @builtin
+<*
+ @require $defined(&#value, (char*)&#value) "This must be a value that can be viewed as a char array"
+ *>
+macro char[] @as_char_view(#value) @builtin
 {
-	return ((char*)value)[:$sizeof(*value)];
+	return ((char*)&#value)[:$sizeof(#value)];
 }
 
 macro isz @str_find(String $string, String $needle) @builtin => $$str_find($string, $needle);
@@ -330,21 +380,39 @@ macro String @str_upper(String $str) @builtin => $$str_upper($str);
 macro String @str_lower(String $str) @builtin => $$str_lower($str);
 macro uint @str_hash(String $str) @builtin => $$str_hash($str);
 
-macro uint int.hash(int i) => i;
-macro uint uint.hash(uint i) => i;
-macro uint short.hash(short s) => s;
-macro uint ushort.hash(ushort s) => s;
-macro uint char.hash(char c) => c;
-macro uint ichar.hash(ichar c) => c;
-macro uint long.hash(long i) => (uint)((i >> 32) ^ i);
-macro uint ulong.hash(ulong i) => (uint)((i >> 32) ^ i);
-macro uint int128.hash(int128 i) => (uint)((i >> 96) ^ (i >> 64) ^ (i >> 32) ^ i);
-macro uint uint128.hash(uint128 i) => (uint)((i >> 96) ^ (i >> 64) ^ (i >> 32) ^ i);
-macro uint bool.hash(bool b) => (uint)b;
-macro uint typeid.hash(typeid t) => ((ulong)(uptr)t).hash();
+macro @generic_hash_core(h, value)
+{
+	h ^= (uint)value; // insert lowest 32 bits
+	h *= 0x96f59e5b; // diffuse them up
+	h ^= h >> 16; // diffuse them down
+	return h;
+}
+
+macro @generic_hash(value)
+{
+	uint h = @generic_hash_core((uint)0x3efd4391, value);
+	$for (var $cnt = 4; $cnt < $sizeof(value); $cnt += 4)
+		value >>= 32; // reduce value
+		h = @generic_hash_core(h, value);
+	$endfor
+	return h;
+}
+
+macro uint int.hash(int i) => @generic_hash(i);
+macro uint uint.hash(uint i) => @generic_hash(i);
+macro uint short.hash(short s) => @generic_hash(s);
+macro uint ushort.hash(ushort s) => @generic_hash(s);
+macro uint char.hash(char c) => @generic_hash(c);
+macro uint ichar.hash(ichar c) => @generic_hash(c);
+macro uint long.hash(long i) => @generic_hash(i);
+macro uint ulong.hash(ulong i) => @generic_hash(i);
+macro uint int128.hash(int128 i) => @generic_hash(i);
+macro uint uint128.hash(uint128 i) => @generic_hash(i);
+macro uint bool.hash(bool b) => @generic_hash(b);
+macro uint typeid.hash(typeid t) => @generic_hash(((ulong)(uptr)t));
 macro uint String.hash(String c) => (uint)fnv32a::encode(c);
 macro uint char[].hash(char[] c) => (uint)fnv32a::encode(c);
-macro uint void*.hash(void* ptr) => ((ulong)(uptr)ptr).hash();
+macro uint void*.hash(void* ptr) => @generic_hash(((ulong)(uptr)ptr));
 
 distinct EmptySlot = void*;
 const EmptySlot EMPTY_MACRO_SLOT @builtin = null;
@@ -352,9 +420,9 @@ macro @is_empty_macro_slot(#arg) @builtin => @typeis(#arg, EmptySlot);
 macro @is_valid_macro_slot(#arg) @builtin => !@typeis(#arg, EmptySlot);
 
 const MAX_FRAMEADDRESS = 128;
-/**
- * @require n >= 0
- **/
+<*
+ @require n >= 0
+*>
 macro void* get_frameaddress(int n)
 {
 	if (n > MAX_FRAMEADDRESS) return null;
@@ -493,9 +561,9 @@ macro void* get_frameaddress(int n)
 	}
 }
 
-/**
- * @require n >= 0
- **/
+<*
+ @require n >= 0
+*>
 macro void* get_returnaddress(int n)
 {
 	if (n > MAX_FRAMEADDRESS) return null;

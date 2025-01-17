@@ -16,11 +16,11 @@ struct Posix_pollfd
 def Posix_nfds_t = CUInt;
 
 extern fn CInt connect(NativeSocket socket, SockAddrPtr address, Socklen_t address_len);
-extern fn NativeSocket socket(AIFamily af, AISockType type, AIProtocol ip_protocol) @extern("socket");
-extern fn int fcntl(NativeSocket socket, int cmd, ...) @extern("fcntl");
-extern fn CInt bind(NativeSocket socket, SockAddrPtr address, Socklen_t address_len) @extern("bind");
-extern fn CInt listen(NativeSocket socket, CInt backlog) @extern("listen");
-extern fn NativeSocket accept(NativeSocket socket, SockAddrPtr address, Socklen_t* address_len) @extern("accept");
+extern fn NativeSocket socket(AIFamily af, AISockType type, AIProtocol ip_protocol);
+extern fn int fcntl(NativeSocket socket, int cmd, ...);
+extern fn CInt bind(NativeSocket socket, SockAddrPtr address, Socklen_t address_len);
+extern fn CInt listen(NativeSocket socket, CInt backlog);
+extern fn NativeSocket accept(NativeSocket socket, SockAddrPtr address, Socklen_t* address_len);
 extern fn CInt poll(Posix_pollfd* fds, Posix_nfds_t nfds, CInt timeout);
 
 const CUShort POLLIN      = 0x0001;
@@ -39,11 +39,12 @@ fn anyfault convert_error(Errno error)
 		case errno::EALREADY: return NetError.CONNECTION_ALREADY_IN_PROGRESS;
 		case errno::EBADF: return NetError.BAD_SOCKET_DESCRIPTOR;
 		case errno::ECONNREFUSED: return NetError.CONNECTION_REFUSED;
+		case errno::ECONNRESET: return NetError.CONNECTION_RESET;
 		case errno::EISCONN: return NetError.ALREADY_CONNECTED;
 		case errno::ENETUNREACH: return NetError.NETWORK_UNREACHABLE;
 		case errno::ENOTSOCK: return NetError.NOT_A_SOCKET;
 		case errno::EINTR: return IoError.INTERRUPTED;
-        case errno::EWOULDBLOCK: return IoError.WOULD_BLOCK;
+		case errno::EWOULDBLOCK: return IoError.WOULD_BLOCK;
 		case errno::EOPNOTSUPP: return NetError.OPERATION_NOT_SUPPORTED_ON_SOCKET;
 		case errno::ETIMEDOUT: return NetError.CONNECTION_TIMED_OUT;
 		default: return IoError.GENERAL_ERROR;
@@ -53,6 +54,11 @@ fn anyfault convert_error(Errno error)
 fn anyfault socket_error()
 {
 	return convert_error(libc::errno());
+}
+
+macro bool NativeSocket.is_valid(self)
+{
+	return (iptr)self >= 0;
 }
 
 macro void! NativeSocket.close(self)
